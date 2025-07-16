@@ -1,13 +1,12 @@
-# FastAPI Backend - Plagiarism Checker API
+# FastAPI Backend - Plagiarism Checker API (Simplified)
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-import requests
 import hashlib
 import re
 from datetime import datetime
 import asyncio
-import aiohttp
+import random
 
 app = FastAPI()
 
@@ -30,158 +29,83 @@ class PlagiarismResponse(BaseModel):
 @app.post("/api/plagiarism/check", response_model=PlagiarismResponse)
 async def check_plagiarism(request: PlagiarismRequest):
     """
-    Check content for plagiarism using multiple sources
+    Check content for plagiarism using simulated analysis
     """
     start_time = datetime.now()
     
     try:
         content = request.content
         
-        # Perform multiple checks simultaneously
-        results = await asyncio.gather(
-            check_web_sources(content),
-            check_academic_sources(content),
-            check_publication_sources(content),
-            return_exceptions=True
-        )
+        # Simulate processing time
+        await asyncio.sleep(2)
         
-        # Combine results
-        all_results = []
-        for result_list in results:
-            if isinstance(result_list, list):
-                all_results.extend(result_list)
+        # Generate mock results based on content analysis
+        results = await generate_mock_results(content)
         
         # Calculate overall score
-        total_similarity = sum(result.similarity for result in all_results)
+        total_similarity = sum(result.similarity for result in results)
         overall_score = max(0, 100 - total_similarity)
         
         processing_time = (datetime.now() - start_time).total_seconds()
         
         return PlagiarismResponse(
             overallScore=overall_score,
-            results=all_results,
+            results=results,
             processingTime=processing_time
         )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def check_web_sources(content: str) -> List[PlagiarismResult]:
-    """Check against web sources"""
+async def generate_mock_results(content: str) -> List[PlagiarismResult]:
+    """Generate realistic mock plagiarism results"""
     results = []
     
-    # Split content into chunks for better matching
-    chunks = split_into_chunks(content, 50)
+    # Split content into sentences for analysis
+    sentences = re.split(r'[.!?]+', content)
+    meaningful_sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
     
-    for i, chunk in enumerate(chunks):
-        # Simulate web search (in real implementation, use search APIs)
-        similarity = await simulate_web_search(chunk)
+    if not meaningful_sentences:
+        return results
+    
+    # Mock sources
+    sources = [
+        {"name": "Wikipedia", "type": "web", "domain": "wikipedia.org"},
+        {"name": "Academic Paper - ResearchGate", "type": "academic", "domain": "researchgate.net"},
+        {"name": "Journal Article - JSTOR", "type": "publication", "domain": "jstor.org"},
+        {"name": "News Article - BBC", "type": "web", "domain": "bbc.com"},
+        {"name": "Blog Post - Medium", "type": "web", "domain": "medium.com"},
+        {"name": "IEEE Paper", "type": "academic", "domain": "ieee.org"},
+        {"name": "Nature Journal", "type": "publication", "domain": "nature.com"},
+        {"name": "Educational Resource", "type": "web", "domain": "edu"}
+    ]
+    
+    # Generate 1-4 results based on content length
+    num_results = min(4, max(1, len(meaningful_sentences) // 3))
+    
+    for i in range(num_results):
+        source = random.choice(sources)
+        sentence = random.choice(meaningful_sentences)
         
-        if similarity > 5:  # Only include matches above threshold
-            results.append(PlagiarismResult(
-                id=f"web_{i}",
-                source=f"Web Source {i+1}",
-                similarity=similarity,
-                matchedText=chunk,
-                url=f"https://example.com/source{i+1}",
-                type="web"
-            ))
+        # Generate similarity score (higher for common phrases)
+        common_words = ["the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was", "one", "our"]
+        words = sentence.lower().split()
+        common_count = sum(1 for word in words if word in common_words)
+        
+        # Base similarity on common words and sentence length
+        base_similarity = min(25, (common_count / len(words)) * 100) if words else 0
+        similarity = max(3, base_similarity + random.uniform(-5, 10))
+        
+        results.append(PlagiarismResult(
+            id=f"result_{i}",
+            source=source["name"],
+            similarity=round(similarity, 1),
+            matchedText=sentence[:100] + "..." if len(sentence) > 100 else sentence,
+            url=f"https://{source['domain']}/article/{i+1}",
+            type=source["type"]
+        ))
     
     return results
-
-async def check_academic_sources(content: str) -> List[PlagiarismResult]:
-    """Check against academic sources"""
-    results = []
-    
-    # Simulate academic database search
-    chunks = split_into_chunks(content, 100)
-    
-    for i, chunk in enumerate(chunks):
-        similarity = await simulate_academic_search(chunk)
-        
-        if similarity > 3:
-            results.append(PlagiarismResult(
-                id=f"academic_{i}",
-                source=f"Academic Paper {i+1}",
-                similarity=similarity,
-                matchedText=chunk,
-                url=f"https://scholar.google.com/paper{i+1}",
-                type="academic"
-            ))
-    
-    return results
-
-async def check_publication_sources(content: str) -> List[PlagiarismResult]:
-    """Check against publication sources"""
-    results = []
-    
-    # Simulate publication database search
-    chunks = split_into_chunks(content, 75)
-    
-    for i, chunk in enumerate(chunks):
-        similarity = await simulate_publication_search(chunk)
-        
-        if similarity > 4:
-            results.append(PlagiarismResult(
-                id=f"publication_{i}",
-                source=f"Publication {i+1}",
-                similarity=similarity,
-                matchedText=chunk,
-                url=f"https://publication.com/article{i+1}",
-                type="publication"
-            ))
-    
-    return results
-
-def split_into_chunks(text: str, words_per_chunk: int) -> List[str]:
-    """Split text into chunks of specified word count"""
-    words = text.split()
-    chunks = []
-    
-    for i in range(0, len(words), words_per_chunk):
-        chunk = ' '.join(words[i:i + words_per_chunk])
-        if len(chunk.strip()) > 20:  # Only include meaningful chunks
-            chunks.append(chunk)
-    
-    return chunks
-
-async def simulate_web_search(text: str) -> float:
-    """Simulate web search API call"""
-    # In real implementation, this would call actual search APIs
-    await asyncio.sleep(0.1)  # Simulate API delay
-    
-    # Simple similarity calculation based on common phrases
-    common_phrases = ["the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was", "one", "our", "out", "day", "get", "has", "him", "his", "how", "its", "may", "new", "now", "old", "see", "two", "way", "who", "boy", "did", "man", "men", "run", "say", "she", "too", "use"]
-    
-    words = text.lower().split()
-    common_count = sum(1 for word in words if word in common_phrases)
-    
-    # Return similarity percentage (0-20%)
-    return min(20, (common_count / len(words)) * 100) if words else 0
-
-async def simulate_academic_search(text: str) -> float:
-    """Simulate academic database search"""
-    await asyncio.sleep(0.15)  # Simulate API delay
-    
-    # Academic texts might have higher similarity for technical terms
-    technical_terms = ["analysis", "research", "study", "method", "result", "conclusion", "data", "significant", "hypothesis", "theory", "model", "framework", "approach", "methodology", "findings", "evidence", "correlation", "statistical", "experimental", "validation"]
-    
-    words = text.lower().split()
-    technical_count = sum(1 for word in words if word in technical_terms)
-    
-    return min(15, (technical_count / len(words)) * 100) if words else 0
-
-async def simulate_publication_search(text: str) -> float:
-    """Simulate publication database search"""
-    await asyncio.sleep(0.12)  # Simulate API delay
-    
-    # Publications might have formal language patterns
-    formal_terms = ["furthermore", "however", "therefore", "moreover", "consequently", "nevertheless", "subsequently", "accordingly", "specifically", "particularly", "essentially", "fundamentally", "demonstrates", "indicates", "suggests", "reveals", "establishes", "confirms", "validates", "supports"]
-    
-    words = text.lower().split()
-    formal_count = sum(1 for word in words if word in formal_terms)
-    
-    return min(12, (formal_count / len(words)) * 100) if words else 0
 
 if __name__ == "__main__":
     import uvicorn

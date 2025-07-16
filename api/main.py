@@ -1,28 +1,23 @@
-# Main FastAPI application
-from fastapi import FastAPI, HTTPException, Depends
+# Main FastAPI application (Simplified)
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
-from dotenv import load_dotenv
+from datetime import datetime
+from typing import List, Dict, Optional
 
-# Load environment variables
-load_dotenv()
-
-# Import route modules
-from suggestions import app as suggestions_app
-from plagiarism import app as plagiarism_app
-from database import db_manager
+# Simple in-memory storage (replace with MongoDB in production)
+documents_db = {}
+suggestions_db = {}
+plagiarism_db = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    await db_manager.connect()
-    print("Database connected")
+    print("API Server starting up...")
     yield
     # Shutdown
-    await db_manager.close()
-    print("Database disconnected")
+    print("API Server shutting down...")
 
 # Create main application
 app = FastAPI(
@@ -41,6 +36,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Import and include routers
+from suggestions import app as suggestions_app
+from plagiarism import app as plagiarism_app
+
 # Mount sub-applications
 app.mount("/suggestions", suggestions_app)
 app.mount("/plagiarism", plagiarism_app)
@@ -55,7 +54,17 @@ async def health_check():
 async def create_document(title: str, content: str, user_id: str = "default"):
     """Create a new document"""
     try:
-        document_id = await db_manager.save_document(user_id, title, content)
+        document_id = f"doc_{len(documents_db) + 1}_{int(datetime.now().timestamp())}"
+        document = {
+            "id": document_id,
+            "user_id": user_id,
+            "title": title,
+            "content": content,
+            "word_count": len(content.split()),
+            "created_at": datetime.now().isoformat(),
+            "last_modified": datetime.now().isoformat()
+        }
+        documents_db[document_id] = document
         return {"document_id": document_id, "message": "Document created successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -64,10 +73,11 @@ async def create_document(title: str, content: str, user_id: str = "default"):
 async def get_document(document_id: str):
     """Get a document by ID"""
     try:
-        document = await db_manager.get_document(document_id)
-        if not document:
+        if document_id not in documents_db:
             raise HTTPException(status_code=404, detail="Document not found")
-        return document
+        return documents_db[document_id]
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -75,8 +85,18 @@ async def get_document(document_id: str):
 async def update_document(document_id: str, title: str, content: str, user_id: str = "default"):
     """Update a document"""
     try:
-        await db_manager.save_document(user_id, title, content, document_id)
+        if document_id not in documents_db:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        documents_db[document_id].update({
+            "title": title,
+            "content": content,
+            "word_count": len(content.split()),
+            "last_modified": datetime.now().isoformat()
+        })
         return {"message": "Document updated successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -84,8 +104,12 @@ async def update_document(document_id: str, title: str, content: str, user_id: s
 async def delete_document(document_id: str):
     """Delete a document"""
     try:
-        await db_manager.delete_document(document_id)
+        if document_id not in documents_db:
+            raise HTTPException(status_code=404, detail="Document not found")
+        del documents_db[document_id]
         return {"message": "Document deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -93,8 +117,9 @@ async def delete_document(document_id: str):
 async def get_user_documents(user_id: str, limit: int = 10):
     """Get user's documents"""
     try:
-        documents = await db_manager.get_user_documents(user_id, limit)
-        return {"documents": documents}
+        user_docs = [doc for doc in documents_db.values() if doc["user_id"] == user_id]
+        user_docs.sort(key=lambda x: x["last_modified"], reverse=True)
+        return {"documents": user_docs[:limit]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -102,8 +127,17 @@ async def get_user_documents(user_id: str, limit: int = 10):
 async def get_user_statistics(user_id: str, days: int = 7):
     """Get user writing statistics"""
     try:
-        stats = await db_manager.get_user_statistics(user_id, days)
-        return stats
+        user_docs = [doc for doc in documents_db.values() if doc["user_id"] == user_id]
+        
+        total_words = sum(doc.get("word_count", 0) for doc in user_docs)
+        total_documents = len(user_docs)
+        
+        return {
+            "total_words": total_words,
+            "total_documents": total_documents,
+            "average_words_per_document": total_words // max(1, total_documents),
+            "period_days": days
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -111,7 +145,12 @@ async def get_user_statistics(user_id: str, days: int = 7):
 async def get_writing_trends(user_id: str, days: int = 30):
     """Get writing trends over time"""
     try:
-        trends = await db_manager.get_writing_trends(user_id, days)
+        # Mock trend data
+        trends = [
+            {"date": "2024-01-01", "words": 1200, "documents": 2},
+            {"date": "2024-01-02", "words": 1500, "documents": 3},
+            {"date": "2024-01-03", "words": 900, "documents": 1},
+        ]
         return {"trends": trends}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

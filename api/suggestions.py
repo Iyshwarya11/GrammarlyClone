@@ -1,21 +1,12 @@
-# FastAPI Backend - Suggestions API
+# FastAPI Backend - Suggestions API (Fixed for offline/network issues)
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Optional
-import requests
-import os
-from groq import Groq
-from transformers import pipeline
 import re
+import random
+from datetime import datetime
 
 app = FastAPI()
-
-# Initialize Groq client
-groq_client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-
-# Initialize Hugging Face models
-grammar_checker = pipeline("text-classification", model="textattack/roberta-base-CoLA")
-sentiment_analyzer = pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
 
 class TextInput(BaseModel):
     content: str
@@ -36,130 +27,165 @@ class SuggestionResponse(BaseModel):
 @app.post("/api/suggestions", response_model=SuggestionResponse)
 async def get_suggestions(text_input: TextInput):
     """
-    Get writing suggestions using Groq API and Hugging Face models
+    Get writing suggestions using rule-based analysis (no external models required)
     """
     try:
         content = text_input.content
         goal = text_input.goal
         
-        # Grammar checking using Hugging Face
-        grammar_issues = await check_grammar(content)
-        
-        # Get suggestions from Groq
-        groq_suggestions = await get_groq_suggestions(content, goal)
-        
-        # Sentiment analysis for tone suggestions
-        tone_suggestions = await analyze_tone(content)
-        
-        # Combine all suggestions
-        all_suggestions = grammar_issues + groq_suggestions + tone_suggestions
+        # Get suggestions using rule-based approach
+        suggestions = []
+        suggestions.extend(check_grammar_rules(content))
+        suggestions.extend(check_clarity_issues(content))
+        suggestions.extend(check_tone_issues(content))
+        suggestions.extend(check_engagement_issues(content))
         
         # Calculate statistics
         stats = calculate_stats(content)
         
         return SuggestionResponse(
-            suggestions=all_suggestions,
+            suggestions=suggestions,
             stats=stats
         )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-async def check_grammar(text: str) -> List[Suggestion]:
-    """Check grammar using Hugging Face model"""
+def check_grammar_rules(text: str) -> List[Suggestion]:
+    """Check grammar using rule-based approach"""
     suggestions = []
     
-    # Split into sentences
-    sentences = re.split(r'[.!?]+', text)
+    # Common grammar patterns
+    patterns = [
+        {
+            "pattern": r"\bthere\s+is\s+\w+\s+\w+s\b",
+            "type": "grammar",
+            "suggestion": "Use 'there are' with plural nouns",
+            "explanation": "Subject-verb agreement error"
+        },
+        {
+            "pattern": r"\bits\s+\w+ing\b",
+            "type": "grammar", 
+            "suggestion": "Consider 'it's' (it is) instead of 'its' (possessive)",
+            "explanation": "Common its/it's confusion"
+        },
+        {
+            "pattern": r"\byour\s+\w+ing\b",
+            "type": "grammar",
+            "suggestion": "Consider 'you're' (you are) instead of 'your' (possessive)",
+            "explanation": "Common your/you're confusion"
+        },
+        {
+            "pattern": r"\b(very|really|quite|extremely)\s+\w+",
+            "type": "clarity",
+            "suggestion": "Consider using a stronger adjective instead of intensifiers",
+            "explanation": "Intensifiers can weaken your writing"
+        }
+    ]
     
-    for i, sentence in enumerate(sentences):
-        if len(sentence.strip()) > 0:
-            # Check grammar using CoLA model
-            result = grammar_checker(sentence.strip())
-            
-            if result[0]['label'] == 'UNACCEPTABLE' and result[0]['score'] > 0.7:
-                suggestions.append(Suggestion(
-                    id=f"grammar_{i}",
-                    type="grammar",
-                    text=sentence.strip(),
-                    suggestion="Review grammar in this sentence",
-                    explanation="This sentence may have grammatical issues",
-                    position={"start": text.find(sentence), "end": text.find(sentence) + len(sentence)}
-                ))
-    
-    return suggestions
-
-async def get_groq_suggestions(text: str, goal: str) -> List[Suggestion]:
-    """Get suggestions from Groq API"""
-    suggestions = []
-    
-    try:
-        prompt = f"""
-        Analyze the following text for {goal} improvements and provide specific suggestions:
-        
-        Text: "{text}"
-        
-        Please provide suggestions in the format:
-        - Issue: [specific text]
-        - Suggestion: [improved version]
-        - Explanation: [why this is better]
-        
-        Focus on {goal} improvements.
-        """
-        
-        response = groq_client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="llama3-8b-8192",
-            max_tokens=1000,
-            temperature=0.3
-        )
-        
-        # Parse Groq response (simplified)
-        content = response.choices[0].message.content
-        
-        # Extract suggestions (this is a simplified parser)
-        suggestion_blocks = content.split('- Issue:')
-        
-        for i, block in enumerate(suggestion_blocks[1:], 1):
-            lines = block.strip().split('\n')
-            if len(lines) >= 3:
-                issue_text = lines[0].strip()
-                suggestion_text = lines[1].replace('- Suggestion:', '').strip()
-                explanation = lines[2].replace('- Explanation:', '').strip()
-                
-                suggestions.append(Suggestion(
-                    id=f"groq_{i}",
-                    type="clarity",
-                    text=issue_text,
-                    suggestion=suggestion_text,
-                    explanation=explanation,
-                    position={"start": text.find(issue_text), "end": text.find(issue_text) + len(issue_text)}
-                ))
-    
-    except Exception as e:
-        print(f"Groq API error: {e}")
-    
-    return suggestions
-
-async def analyze_tone(text: str) -> List[Suggestion]:
-    """Analyze tone using Hugging Face sentiment analysis"""
-    suggestions = []
-    
-    try:
-        result = sentiment_analyzer(text)
-        
-        if result[0]['label'] == 'LABEL_0' and result[0]['score'] > 0.7:  # Negative
+    for i, pattern_info in enumerate(patterns):
+        matches = re.finditer(pattern_info["pattern"], text, re.IGNORECASE)
+        for match in matches:
             suggestions.append(Suggestion(
-                id="tone_1",
-                type="tone",
-                text=text[:100] + "..." if len(text) > 100 else text,
-                suggestion="Consider using more positive language",
-                explanation="The tone appears negative. Consider rephrasing for better engagement",
-                position={"start": 0, "end": min(100, len(text))}
+                id=f"grammar_{i}_{match.start()}",
+                type=pattern_info["type"],
+                text=match.group(),
+                suggestion=pattern_info["suggestion"],
+                explanation=pattern_info["explanation"],
+                position={"start": match.start(), "end": match.end()}
             ))
     
-    except Exception as e:
-        print(f"Tone analysis error: {e}")
+    return suggestions
+
+def check_clarity_issues(text: str) -> List[Suggestion]:
+    """Check for clarity issues"""
+    suggestions = []
+    
+    # Long sentences
+    sentences = re.split(r'[.!?]+', text)
+    for i, sentence in enumerate(sentences):
+        words = sentence.split()
+        if len(words) > 25:
+            start_pos = text.find(sentence.strip())
+            if start_pos != -1:
+                suggestions.append(Suggestion(
+                    id=f"clarity_long_{i}",
+                    type="clarity",
+                    text=sentence.strip()[:50] + "...",
+                    suggestion="Consider breaking this into shorter sentences",
+                    explanation="Long sentences can be hard to follow",
+                    position={"start": start_pos, "end": start_pos + len(sentence)}
+                ))
+    
+    # Passive voice detection
+    passive_patterns = [
+        r"\b(was|were|is|are|been|being)\s+\w+ed\b",
+        r"\b(was|were|is|are|been|being)\s+\w+en\b"
+    ]
+    
+    for pattern in passive_patterns:
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            suggestions.append(Suggestion(
+                id=f"clarity_passive_{match.start()}",
+                type="clarity",
+                text=match.group(),
+                suggestion="Consider using active voice",
+                explanation="Active voice is more direct and engaging",
+                position={"start": match.start(), "end": match.end()}
+            ))
+    
+    return suggestions
+
+def check_tone_issues(text: str) -> List[Suggestion]:
+    """Check for tone issues"""
+    suggestions = []
+    
+    # Weak words
+    weak_words = ["maybe", "perhaps", "possibly", "might", "could", "sort of", "kind of"]
+    
+    for weak_word in weak_words:
+        pattern = r'\b' + re.escape(weak_word) + r'\b'
+        matches = re.finditer(pattern, text, re.IGNORECASE)
+        for match in matches:
+            suggestions.append(Suggestion(
+                id=f"tone_weak_{match.start()}",
+                type="tone",
+                text=match.group(),
+                suggestion="Consider using more confident language",
+                explanation="Weak words can undermine your authority",
+                position={"start": match.start(), "end": match.end()}
+            ))
+    
+    return suggestions
+
+def check_engagement_issues(text: str) -> List[Suggestion]:
+    """Check for engagement issues"""
+    suggestions = []
+    
+    # Repetitive sentence starters
+    sentences = re.split(r'[.!?]+', text)
+    starters = {}
+    
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if sentence:
+            first_words = ' '.join(sentence.split()[:2]).lower()
+            if first_words in starters:
+                starters[first_words] += 1
+            else:
+                starters[first_words] = 1
+    
+    for starter, count in starters.items():
+        if count > 2:
+            suggestions.append(Suggestion(
+                id=f"engagement_repetitive_{starter}",
+                type="engagement",
+                text=f"Sentences starting with '{starter}'",
+                suggestion="Vary your sentence beginnings",
+                explanation="Repetitive sentence starters can make writing monotonous",
+                position={"start": 0, "end": 50}
+            ))
     
     return suggestions
 
@@ -169,13 +195,20 @@ def calculate_stats(text: str) -> dict:
     sentences = re.split(r'[.!?]+', text)
     paragraphs = text.split('\n\n')
     
+    # Simple readability score based on sentence and word length
+    avg_sentence_length = len(words) / max(1, len([s for s in sentences if s.strip()]))
+    avg_word_length = sum(len(word) for word in words) / max(1, len(words))
+    
+    # Simple readability formula (higher is better)
+    readability_score = max(0, min(100, 100 - (avg_sentence_length * 2) - (avg_word_length * 5)))
+    
     return {
         "wordCount": len(words),
         "characters": len(text),
         "sentences": len([s for s in sentences if s.strip()]),
         "paragraphs": len([p for p in paragraphs if p.strip()]),
         "readingTime": max(1, len(words) // 250),
-        "readabilityScore": min(100, max(0, 100 - len(words) // 10))  # Simplified score
+        "readabilityScore": int(readability_score)
     }
 
 if __name__ == "__main__":
