@@ -39,10 +39,82 @@ groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY != "your-groq-api-key-h
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("AI-Powered Writing Assistant API starting up...")
+    # Initialize with sample data for frontend
+    initialize_sample_data()
     yield
     # Shutdown
     logger.info("API Server shutting down...")
 
+def initialize_sample_data():
+    """Initialize sample data for frontend testing"""
+    sample_docs = [
+        {
+            "id": "1",
+            "user_id": "default",
+            "title": "Marketing Proposal Draft",
+            "content": "This is a comprehensive marketing proposal for our new product launch. The strategy includes digital marketing, social media campaigns, and traditional advertising methods.",
+            "word_count": 1250,
+            "character_count": 7500,
+            "score": 89,
+            "status": "In Progress",
+            "created_at": (datetime.now() - timedelta(hours=2)).isoformat(),
+            "last_modified": (datetime.now() - timedelta(hours=2)).isoformat(),
+            "analytics": {
+                "readability_score": 75.0,
+                "sentiment_score": 0.2,
+                "tone_analysis": {"professional": 0.8, "formal": 0.6, "neutral": 0.4},
+                "complexity_score": 65.0,
+                "engagement_score": 70.0,
+                "word_diversity": 85.0,
+                "sentence_variety": 7.2
+            }
+        },
+        {
+            "id": "2",
+            "user_id": "default",
+            "title": "Research Paper - AI Ethics",
+            "content": "Artificial intelligence ethics is a critical field that examines the moral implications of AI systems. This paper explores the key ethical considerations in AI development and deployment.",
+            "word_count": 3500,
+            "character_count": 21000,
+            "score": 95,
+            "status": "Completed",
+            "created_at": (datetime.now() - timedelta(days=1)).isoformat(),
+            "last_modified": (datetime.now() - timedelta(days=1)).isoformat(),
+            "analytics": {
+                "readability_score": 82.0,
+                "sentiment_score": 0.1,
+                "tone_analysis": {"formal": 0.9, "professional": 0.8, "neutral": 0.7},
+                "complexity_score": 78.0,
+                "engagement_score": 65.0,
+                "word_diversity": 92.0,
+                "sentence_variety": 8.5
+            }
+        },
+        {
+            "id": "3",
+            "user_id": "default",
+            "title": "Email Campaign Copy",
+            "content": "Subject: Exciting New Features Coming Soon! Dear valued customers, we're thrilled to announce some amazing updates to our platform that will enhance your experience.",
+            "word_count": 800,
+            "character_count": 4800,
+            "score": 92,
+            "status": "Reviewed",
+            "created_at": (datetime.now() - timedelta(days=3)).isoformat(),
+            "last_modified": (datetime.now() - timedelta(days=3)).isoformat(),
+            "analytics": {
+                "readability_score": 88.0,
+                "sentiment_score": 0.6,
+                "tone_analysis": {"casual": 0.7, "professional": 0.5, "neutral": 0.3},
+                "complexity_score": 45.0,
+                "engagement_score": 85.0,
+                "word_diversity": 78.0,
+                "sentence_variety": 6.8
+            }
+        }
+    ]
+    
+    for doc in sample_docs:
+        documents_db[doc["id"]] = doc
 # Create main application
 app = FastAPI(
     title="AI-Powered Writing Assistant API",
@@ -54,12 +126,36 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Frontend-compatible models
+class DocumentResponse(BaseModel):
+    id: str
+    title: str
+    content: str
+    word_count: int
+    score: int
+    status: str
+    last_modified: str
+    created_at: str
+
+class DashboardStats(BaseModel):
+    words_written: int
+    documents_created: int
+    average_score: int
+    improvement_rate: int
+
+class RecentDocument(BaseModel):
+    id: str
+    title: str
+    last_modified: str
+    word_count: int
+    score: int
+    status: str
 # Pydantic models
 class DocumentCreate(BaseModel):
     title: str
@@ -86,6 +182,7 @@ class AISuggestion(BaseModel):
     confidence: float
     position: Dict[str, int]
     severity: str  # low, medium, high
+    rule: Optional[str] = None  # Grammar rule or writing principle
 
 class AIAnalytics(BaseModel):
     readability_score: float
@@ -163,6 +260,9 @@ async def create_document(document: DocumentCreate):
         # Perform initial AI analysis
         analytics = await analyze_text_with_ai(document.content)
         
+        # Calculate score based on analytics
+        score = calculate_document_score(analytics)
+        
         doc_data = {
             "id": document_id,
             "user_id": document.user_id,
@@ -170,6 +270,8 @@ async def create_document(document: DocumentCreate):
             "content": document.content,
             "word_count": len(document.content.split()),
             "character_count": len(document.content),
+            "score": score,
+            "status": "In Progress",
             "analytics": analytics,
             "created_at": datetime.now().isoformat(),
             "last_modified": datetime.now().isoformat()
@@ -180,11 +282,33 @@ async def create_document(document: DocumentCreate):
         # Store analytics for insights
         await store_analytics(document.user_id, document_id, analytics)
         
-        return {"document_id": document_id, "message": "Document created successfully", "analytics": analytics}
+        return {
+            "document_id": document_id, 
+            "message": "Document created successfully", 
+            "score": score,
+            "analytics": analytics.dict() if hasattr(analytics, 'dict') else analytics
+        }
     except Exception as e:
         logger.error(f"Error creating document: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def calculate_document_score(analytics) -> int:
+    """Calculate overall document score from analytics"""
+    try:
+        if hasattr(analytics, 'dict'):
+            analytics_dict = analytics.dict()
+        else:
+            analytics_dict = analytics
+            
+        readability = analytics_dict.get("readability_score", 50)
+        engagement = analytics_dict.get("engagement_score", 50)
+        word_diversity = analytics_dict.get("word_diversity", 50)
+        
+        # Weighted average
+        score = (readability * 0.4 + engagement * 0.3 + word_diversity * 0.3)
+        return int(max(0, min(100, score)))
+    except:
+        return 75  # Default score
 @app.get("/api/documents/{document_id}")
 async def get_document(document_id: str):
     """Get a document by ID"""

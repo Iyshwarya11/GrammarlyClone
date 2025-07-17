@@ -206,27 +206,115 @@ class AITextAnalyzer:
         """Fallback grammar checking"""
         errors = []
         
-        # Common grammar patterns
+        # Comprehensive grammar and spelling patterns
         patterns = [
+            # Grammar errors
             (r"\bthere\s+is\s+\w+\s+\w+s\b", "Use 'there are' with plural nouns", "grammar"),
+            (r"\b(he|she|it)\s+are\b", "Use 'is' with singular subjects", "grammar"),
+            (r"\b(they|we|you)\s+is\b", "Use 'are' with plural subjects", "grammar"),
             (r"\bits\s+\w+ing\b", "Consider 'it's' (it is) instead of 'its' (possessive)", "grammar"),
             (r"\byour\s+\w+ing\b", "Consider 'you're' (you are) instead of 'your' (possessive)", "grammar"),
-            (r"\b(very|really|quite|extremely)\s+\w+", "Consider using a stronger adjective", "style"),
+            (r"\bwould\s+of\b", "Use 'would have' instead of 'would of'", "grammar"),
+            (r"\bcould\s+of\b", "Use 'could have' instead of 'could of'", "grammar"),
+            (r"\bshould\s+of\b", "Use 'should have' instead of 'should of'", "grammar"),
+            
+            # Spelling errors
+            (r"\bteh\b", "Correct spelling: 'the'", "spelling"),
+            (r"\badn\b", "Correct spelling: 'and'", "spelling"),
+            (r"\brecieve\b", "Correct spelling: 'receive'", "spelling"),
+            (r"\boccured\b", "Correct spelling: 'occurred'", "spelling"),
+            (r"\bseperate\b", "Correct spelling: 'separate'", "spelling"),
+            (r"\bdefinately\b", "Correct spelling: 'definitely'", "spelling"),
+            (r"\bneccessary\b", "Correct spelling: 'necessary'", "spelling"),
+            
+            # Punctuation errors
+            (r"\s+,", "Remove space before comma", "punctuation"),
+            (r"\s+\.", "Remove space before period", "punctuation"),
+            (r"\b(Mr|Dr|Mrs|Ms)\s+[A-Z]", "Add period after abbreviation", "punctuation"),
+            
+            # Style improvements
+            (r"\b(very|really|quite|extremely)\s+\w+", "Use stronger adjective instead of intensifier", "word_choice"),
+            (r"\bin order to\b", "Simply use 'to'", "word_choice"),
+            (r"\bdue to the fact that\b", "Use 'because'", "word_choice"),
         ]
         
         for pattern, explanation, error_type in patterns:
             matches = re.finditer(pattern, text, re.IGNORECASE)
             for match in matches:
+                # Generate appropriate correction
+                correction = self._generate_correction(match.group(), error_type)
+                
                 errors.append({
                     "error_type": error_type,
                     "original": match.group(),
-                    "correction": f"[Corrected: {match.group()}]",
+                    "correction": correction,
                     "explanation": explanation,
                     "position": {"start": match.start(), "end": match.end()},
-                    "severity": "medium"
+                    "severity": self._get_error_severity(error_type),
+                    "rule": self._get_grammar_rule(explanation)
                 })
         
         return errors
+    
+    def _generate_correction(self, original: str, error_type: str) -> str:
+        """Generate appropriate correction for the error"""
+        original_lower = original.lower()
+        
+        # Spelling corrections
+        spelling_map = {
+            "teh": "the", "adn": "and", "recieve": "receive",
+            "occured": "occurred", "seperate": "separate", 
+            "definately": "definitely", "neccessary": "necessary"
+        }
+        
+        if error_type == "spelling" and original_lower in spelling_map:
+            return spelling_map[original_lower]
+        
+        # Grammar corrections
+        if "there is" in original_lower:
+            return original.replace("is", "are")
+        if "its" in original_lower:
+            return original.replace("its", "it's")
+        if "your" in original_lower:
+            return original.replace("your", "you're")
+        if "would of" in original_lower:
+            return original.replace("of", "have")
+        if "could of" in original_lower:
+            return original.replace("of", "have")
+        if "should of" in original_lower:
+            return original.replace("of", "have")
+        
+        # Word choice improvements
+        if "in order to" in original_lower:
+            return original.replace("in order to", "to")
+        if "due to the fact that" in original_lower:
+            return original.replace("due to the fact that", "because")
+        
+        return f"[Corrected: {original}]"
+    
+    def _get_error_severity(self, error_type: str) -> str:
+        """Get severity level for error type"""
+        severity_map = {
+            "spelling": "high",
+            "grammar": "high",
+            "punctuation": "medium", 
+            "word_choice": "low",
+            "structure": "medium"
+        }
+        return severity_map.get(error_type, "medium")
+    
+    def _get_grammar_rule(self, explanation: str) -> str:
+        """Extract grammar rule from explanation"""
+        if "subject-verb" in explanation.lower():
+            return "Subject-Verb Agreement"
+        elif "spelling" in explanation.lower():
+            return "Spelling"
+        elif "punctuation" in explanation.lower():
+            return "Punctuation"
+        elif "possessive" in explanation.lower():
+            return "Possessive vs Contraction"
+        else:
+            return "General Grammar"
     
     def calculate_readability_advanced(self, text: str) -> Dict[str, float]:
         """Advanced readability analysis"""
