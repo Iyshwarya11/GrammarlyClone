@@ -29,9 +29,11 @@ import {
   Minimize2,
   Eye,
   EyeOff,
-  Zap
+  Zap,
+  Trash
 } from 'lucide-react';
 import Link from 'next/link';
+import { useSession, signIn } from "next-auth/react";
 
 interface Suggestion {
   id: string;
@@ -63,8 +65,9 @@ interface DocumentHistory {
 }
 
 export default function Editor() {
-  // Editor state
-  const [content, setContent] = useState('Write your content here and see real-time AI suggestions appear in the sidebar. This is a sample text that contains some spelling mistakes like recieve and definately. I am going to the store yesterday. She have been working hard.');
+  // All hooks at the top
+  const { data: session, status } = useSession();
+  const [content, setContent] = useState('');
   const [title, setTitle] = useState('Untitled Document');
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [stats, setStats] = useState<DocumentStats>({
@@ -75,8 +78,6 @@ export default function Editor() {
     tone: 'neutral',
     overallScore: 0
   });
-  
-  // UI state
   const [isLoading, setIsLoading] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [selectedText, setSelectedText] = useState('');
@@ -114,35 +115,27 @@ export default function Editor() {
   const [chainingLoading, setChainingLoading] = useState(false);
   const [chainingError, setChainingError] = useState<string | null>(null);
 
-  // Voice-to-text logic
-  const startListening = () => {
-    if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
-      alert('Speech recognition is not supported in this browser. Please use Chrome or Edge.');
-      return;
-    }
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setContent(prev => prev + (prev && !prev.endsWith(' ') ? ' ' : '') + transcript);
-    };
-    recognition.onend = () => setIsListening(false);
-    recognition.onerror = () => setIsListening(false);
-    recognitionRef.current = recognition;
-    setIsListening(true);
-    recognition.start();
-  };
-  const stopListening = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    }
-  };
+  const [rewriteTone, setRewriteTone] = useState('Formal');
+  const [rewrittenText, setRewrittenText] = useState('');
+  const [rewriteLoading, setRewriteLoading] = useState(false);
+  const [rewriteError, setRewriteError] = useState<string | null>(null);
+  const toneOptions = [
+    'Formal',
+    'Informal / Casual',
+    'Friendly',
+    'Confident',
+    'Optimistic',
+    'Serious',
+    'Humorous',
+    'Sarcastic',
+    'Curious',
+    'Urgent',
+  ];
 
-  // Enhanced AI suggestions fetching
+  const WORD_LIMIT = 500;
+  const [wordLimitWarning, setWordLimitWarning] = useState(false);
+
+  // All useCallback and useEffect hooks also at the top
   const fetchSuggestions = useCallback(async () => {
     if (content.length > 10) {
       try {
@@ -156,7 +149,8 @@ export default function Editor() {
             content, 
             goal, 
             tone: 'professional', 
-            audience: 'general' 
+            audience: 'general',
+            user_id: session?.user?.email
           }),
         });
 
@@ -194,9 +188,8 @@ export default function Editor() {
         setIsLoading(false);
       }
     }
-  }, [content, suggestionFilters, goal]);
+  }, [content, suggestionFilters, goal, session?.user?.email]);
 
-  // Calculate document statistics
   const calculateStats = useCallback(() => {
     const words = content.trim().split(/\s+/).filter(word => word.length > 0);
     const sentences = content.split(/[.!?]+/).filter(sentence => sentence.trim().length > 0);
@@ -229,7 +222,6 @@ export default function Editor() {
     });
   }, [content, suggestions.length]);
 
-  // Auto-save document to history
   const autoSaveDocument = useCallback(() => {
     if (content.trim() && title.trim()) {
       const newDocument: DocumentHistory = {
@@ -251,35 +243,116 @@ export default function Editor() {
     }
   }, [content, title, stats.wordCount, stats.overallScore]);
 
-  // Load document from history
-  const loadDocument = (doc: DocumentHistory) => {
-    setTitle(doc.title);
-    setContent(doc.content);
-    setIsDirty(false);
+  useEffect(() => {
+    calculateStats();
+  }, [calculateStats]);
+
+  useEffect(() => {
+    const timeoutId = setTimeout(fetchSuggestions, 1000);
+    return () => clearTimeout(timeoutId);
+  }, [fetchSuggestions]);
+
+  useEffect(() => {
+    setIsDirty(true);
+  }, [content]);
+
+  useEffect(() => {
+    if (isDirty && content.length > 10) {
+      const timeoutId = setTimeout(autoSaveDocument, 5000);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [content, isDirty, autoSaveDocument]);
+
+  // Fetch recent documents for the logged-in user
+  useEffect(() => {
+    if (session?.user?.email) {
+      fetch(`http://localhost:8000/api/documents?user_id=${encodeURIComponent(session.user.email)}&limit=10`)
+        .then(res => res.json())
+        .then(docs => {
+          setDocumentHistory(
+            docs.map((doc: any) => ({
+              id: doc.id,
+              title: doc.title,
+              content: doc.content,
+              lastModified: doc.last_modified,
+              wordCount: doc.word_count,
+              score: doc.score
+            }))
+          );
+        });
+    }
+  }, [session?.user?.email]);
+
+  if (status === "loading") return <div>Loading...</div>;
+  if (!session) {
+    signIn();
+    return null;
+  }
+  // Voice-to-text logic
+  const startListening = () => {
+    if (!('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+      alert('Speech recognition is not supported in this browser. Please use Chrome or Edge.');
+      return;
+    }
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setContent(prev => prev + (prev && !prev.endsWith(' ') ? ' ' : '') + transcript);
+    };
+    recognition.onend = () => setIsListening(false);
+    recognition.onerror = () => setIsListening(false);
+    recognitionRef.current = recognition;
+    setIsListening(true);
+    recognition.start();
+  };
+  const stopListening = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    }
   };
 
   // Enhanced suggestion application with better error prevention
   const applySuggestion = (suggestion: Suggestion) => {
-    // Normalize quotes and apostrophes
-    let originalText = suggestion.original_text.replace(/^"|"$/g, '').replace(/[’‘]/g, "'").trim();
-    let suggestedText = suggestion.suggested_text.replace(/^"|"$/g, '').replace(/[’‘]/g, "'").trim();
+    if (!suggestion.position) {
+      // fallback to old logic if no position is provided
+      let originalText = suggestion.original_text.replace(/^"|"$/g, '').replace(/[’‘]/g, "'").trim();
+      let suggestedText = suggestion.suggested_text.replace(/^"|"$/g, '').replace(/[’‘]/g, "'").trim();
 
-    if (!originalText || !suggestedText) {
-      console.warn('Invalid suggestion: missing original or suggested text');
+      if (!originalText || !suggestedText) {
+        console.warn('Invalid suggestion: missing original or suggested text');
+        return;
+      }
+
+      // Build a regex for whole word, case-insensitive, normalized apostrophes
+      const regex = new RegExp(`\\b${originalText.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'i');
+      const match = content.match(regex);
+
+      if (!match) {
+        console.warn('Original text not found in content');
+        return;
+      }
+
+      // Replace only the first occurrence, preserving the rest of the content
+      const newContent = content.replace(regex, suggestedText);
+
+      setUndoStack(prev => [...prev, content]);
+      setContent(newContent);
+      setIsDirty(true);
+      setSuggestions(prev => prev.filter(s => s.id !== suggestion.id));
+      setTimeout(autoSaveDocument, 1000);
       return;
     }
 
-    // Build a regex for whole word, case-insensitive, normalized apostrophes
-    const regex = new RegExp(`\\b${originalText.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'i');
-    const match = content.match(regex);
-
-    if (!match) {
-      console.warn('Original text not found in content');
-      return;
-    }
-
-    // Replace only the first occurrence, preserving the rest of the content
-    const newContent = content.replace(regex, suggestedText);
+    // Use position for precise replacement
+    const { start, end } = suggestion.position;
+    const before = content.slice(0, start);
+    const after = content.slice(end);
+    const newContent = before + suggestion.suggested_text + after;
 
     setUndoStack(prev => [...prev, content]);
     setContent(newContent);
@@ -340,6 +413,20 @@ export default function Editor() {
     URL.revokeObjectURL(url);
   };
 
+  // Add this function to save a document to the backend
+  const saveDocumentToBackend = async () => {
+    if (!session?.user?.email || !title.trim() || !content.trim()) return;
+    await fetch('http://localhost:8000/api/documents', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title,
+        content,
+        user_id: session.user.email
+      })
+    });
+  };
+
   // Handle text selection
   const handleTextSelection = () => {
     const textarea = textareaRef.current;
@@ -387,28 +474,6 @@ export default function Editor() {
       return newFilters;
     });
   };
-
-  // Effects
-  useEffect(() => {
-    calculateStats();
-  }, [calculateStats]);
-
-  useEffect(() => {
-    const timeoutId = setTimeout(fetchSuggestions, 1000);
-    return () => clearTimeout(timeoutId);
-  }, [fetchSuggestions]);
-
-  useEffect(() => {
-    setIsDirty(true);
-  }, [content]);
-
-  // Auto-save effect
-  useEffect(() => {
-    if (isDirty && content.length > 10) {
-      const timeoutId = setTimeout(autoSaveDocument, 5000);
-      return () => clearTimeout(timeoutId);
-    }
-  }, [content, isDirty, autoSaveDocument]);
 
   const getSuggestionIcon = (type: string) => {
     switch (type) {
@@ -458,7 +523,7 @@ export default function Editor() {
       const suggestionsRes = await fetch('http://localhost:8000/api/ai/suggestions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, goal, tone: 'professional', audience: 'general' }),
+        body: JSON.stringify({ content, goal, tone: 'professional', audience: 'general', user_id: session?.user?.email }),
       });
       if (!suggestionsRes.ok) throw new Error('Correction step failed');
       const suggestionsData = await suggestionsRes.json();
@@ -477,7 +542,7 @@ export default function Editor() {
       const rewriteRes = await fetch('http://localhost:8000/api/ai/rewrite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: correctedText, goal }),
+        body: JSON.stringify({ content: correctedText, goal, user_id: session?.user?.email }),
       });
       if (!rewriteRes.ok) throw new Error('Rewrite step failed');
       const rewriteData = await rewriteRes.json();
@@ -486,7 +551,7 @@ export default function Editor() {
       const summarizeRes = await fetch('http://localhost:8000/api/ai/summarize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: rewrittenText }),
+        body: JSON.stringify({ content: rewrittenText, user_id: session?.user?.email }),
       });
       if (!summarizeRes.ok) throw new Error('Summarize step failed');
       const summarizeData = await summarizeRes.json();
@@ -499,8 +564,46 @@ export default function Editor() {
     }
   };
 
+  // Load document from history
+  const loadDocument = (doc: DocumentHistory) => {
+    setTitle(doc.title);
+    setContent(doc.content);
+    setIsDirty(false);
+    setStats(prev => ({
+      ...prev,
+      wordCount: doc.wordCount,
+      overallScore: doc.score
+    }));
+  };
+
+  // Add a delete handler
+  const deleteDocumentFromHistory = async (doc: DocumentHistory) => {
+    setDocumentHistory(prev => prev.filter(d => d.id !== doc.id));
+    // Optionally, delete from backend if doc.id is a backend ID
+    try {
+      await fetch(`http://localhost:8000/api/documents/${doc.id}`, { method: 'DELETE' });
+      // Refresh document history from backend for the user
+      if (session?.user?.email) {
+        fetch(`http://localhost:8000/api/documents?user_id=${encodeURIComponent(session.user.email)}&limit=10`)
+          .then(res => res.json())
+          .then(docs => {
+            setDocumentHistory(
+              docs.map((doc: any) => ({
+                id: doc.id,
+                title: doc.title,
+                content: doc.content,
+                lastModified: doc.last_modified,
+                wordCount: doc.word_count,
+                score: doc.score
+              }))
+            );
+          });
+      }
+    } catch (e) {}
+  };
+
   return (
-    <div className="min-h-screen min-w-full w-full h-full bg-gray-50">
+    <div className="min-h-screen w-full bg-gray-50">
       {/* Header */}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -627,7 +730,7 @@ export default function Editor() {
                 <Download className="w-4 h-4 mr-2" />
                 Download
               </Button>
-              <Button size="sm" onClick={autoSaveDocument}>
+              <Button size="sm" onClick={saveDocumentToBackend}>
                 <Save className="w-4 h-4 mr-2" />
                 Save
               </Button>
@@ -636,291 +739,382 @@ export default function Editor() {
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className={`grid ${getLayoutClasses()} gap-6`}>
-          {/* Left Sidebar - Document History */}
-          {layoutMode !== 'minimal' && (
-            <div className="lg:col-span-1">
-              {/* Create Document Button */}
-              <Button
-                className="w-full mb-4"
-                variant="default"
-                onClick={() => {
-                  setTitle('Untitled Document');
-                  setContent('');
-                  setIsDirty(false);
-                }}
-              >
-                + Create Document
-              </Button>
-              <Card>
+      <div className={`w-full px-4 py-6 ${getLayoutClasses()} grid gap-6`}>
+        {/* Left Sidebar - Document History */}
+        {layoutMode !== 'minimal' && (
+          <div className="lg:col-span-1">
+            {/* Create Document Button */}
+            <Button
+              className="w-full mb-4"
+              variant="default"
+              onClick={() => {
+                setTitle('Untitled Document');
+                setContent('');
+                setIsDirty(false);
+              }}
+            >
+              + Create Document
+            </Button>
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center space-x-2">
+                  <FileText className="w-4 h-4" />
+                  <span>Document History</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowHistory(!showHistory)}
+                    className="ml-auto"
+                  >
+                    {showHistory ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </Button>
+                </CardTitle>
+              </CardHeader>
+              {showHistory && (
+                <CardContent>
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {documentHistory.length === 0 ? (
+                      <div className="text-center py-4 text-gray-500">
+                        <FileText className="w-6 h-6 mx-auto mb-2" />
+                        <p className="text-sm">No saved documents</p>
+                      </div>
+                    ) : (
+                      documentHistory.map((doc) => (
+                        <div
+                          key={doc.id}
+                          className="p-3 border rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
+                          onClick={() => loadDocument(doc)}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <h4 className="text-sm font-medium text-gray-900 truncate">
+                              {doc.title}
+                            </h4>
+                            <Badge className={`text-xs ${getScoreColor(doc.score)}`}>
+                              {doc.score}/100
+                            </Badge>
+                          </div>
+                          <div className="flex items-center justify-between text-xs text-gray-500">
+                            <span>{doc.wordCount} words</span>
+                            <span className="flex items-center">
+                              <Clock className="w-3 h-3 mr-1" />
+                              {new Date(doc.lastModified).toLocaleDateString()}
+                            </span>
+                          </div>
+                          <div className="flex justify-end mt-1">
+                            <button
+                              className="text-red-500 hover:text-red-700 p-1"
+                              title="Delete document"
+                              onClick={e => {
+                                e.stopPropagation();
+                                deleteDocumentFromHistory(doc);
+                              }}
+                            >
+                              <Trash className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+            {/* Suggestion Filters - moved below Document History */}
+            <div className="mt-4 p-3 border rounded-lg bg-gray-50">
+              <div className="font-semibold mb-2 text-sm">Suggestion Filters</div>
+              <div className="flex flex-wrap gap-4">
+                {['spelling', 'grammar', 'tense', 'clarity', 'style', 'punctuation', 'formal', 'casual', 'marketing', 'friendly', 'general'].map((type) => (
+                  <label key={type} className="flex items-center space-x-2 text-sm capitalize cursor-pointer">
+                    <input
+                      type="checkbox"
+                      id={type}
+                      checked={suggestionFilters.has(type)}
+                      onChange={() => toggleSuggestionFilter(type)}
+                      className="rounded border-gray-300 focus:ring-blue-500"
+                    />
+                    <span>{type}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Statistics Card - moved below suggestion filter */}
+            {showStats && (
+              <Card className="mt-4">
                 <CardHeader className="pb-3">
                   <CardTitle className="text-base flex items-center space-x-2">
-                    <FileText className="w-4 h-4" />
-                    <span>Document History</span>
+                    <BarChart3 className="w-4 h-4" />
+                    <span>Statistics</span>
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setShowHistory(!showHistory)}
+                      onClick={() => setShowStats(false)}
                       className="ml-auto"
                     >
-                      {showHistory ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      <EyeOff className="w-4 h-4" />
                     </Button>
                   </CardTitle>
                 </CardHeader>
-                {showHistory && (
-                  <CardContent>
-                    <div className="space-y-2 max-h-96 overflow-y-auto">
-                      {documentHistory.length === 0 ? (
-                        <div className="text-center py-4 text-gray-500">
-                          <FileText className="w-6 h-6 mx-auto mb-2" />
-                          <p className="text-sm">No saved documents</p>
-                        </div>
-                      ) : (
-                        documentHistory.map((doc) => (
-                          <div
-                            key={doc.id}
-                            className="p-3 border rounded-lg hover:bg-gray-50 cursor-pointer transition-colors"
-                            onClick={() => loadDocument(doc)}
-                          >
-                            <div className="flex items-center justify-between mb-1">
-                              <h4 className="text-sm font-medium text-gray-900 truncate">
-                                {doc.title}
-                              </h4>
-                              <Badge className={`text-xs ${getScoreColor(doc.score)}`}>
-                                {doc.score}/100
-                              </Badge>
-                            </div>
-                            <div className="flex items-center justify-between text-xs text-gray-500">
-                              <span>{doc.wordCount} words</span>
-                              <span className="flex items-center">
-                                <Clock className="w-3 h-3 mr-1" />
-                                {new Date(doc.lastModified).toLocaleDateString()}
-                              </span>
-                            </div>
-                          </div>
-                        ))
-                      )}
-                  </div>
-                  </CardContent>
-                )}
-              </Card>
-              {/* Suggestion Filters - moved below Document History */}
-              <div className="mt-4 p-3 border rounded-lg bg-gray-50">
-                <div className="font-semibold mb-2 text-sm">Suggestion Filters</div>
-                <div className="flex flex-wrap gap-4">
-                  {['spelling', 'grammar', 'tense', 'clarity', 'style', 'punctuation', 'formal', 'casual', 'marketing', 'friendly', 'general'].map((type) => (
-                    <label key={type} className="flex items-center space-x-2 text-sm capitalize cursor-pointer">
-                      <input
-                        type="checkbox"
-                        id={type}
-                        checked={suggestionFilters.has(type)}
-                        onChange={() => toggleSuggestionFilter(type)}
-                        className="rounded border-gray-300 focus:ring-blue-500"
-                      />
-                      <span>{type}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              {/* Statistics Card - moved below suggestion filter */}
-              {showStats && (
-                <Card className="mt-4">
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base flex items-center space-x-2">
-                      <BarChart3 className="w-4 h-4" />
-                      <span>Statistics</span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setShowStats(false)}
-                        className="ml-auto"
-                      >
-                        <EyeOff className="w-4 h-4" />
-                      </Button>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-600">Overall Score</span>
-                        <Badge className={`font-bold ${getScoreColor(stats.overallScore)}`}>
-                          <Star className="w-3 h-3 mr-1" />
-                          {stats.overallScore}/100
-                        </Badge>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-600">Words</span>
-                        <Badge variant="default">{stats.wordCount}</Badge>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-600">Characters</span>
-                        <Badge variant="default">{stats.characters}</Badge>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-600">Sentences</span>
-                        <Badge variant="default">{stats.sentences}</Badge>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-600">Readability</span>
-                        <Badge variant="default">{stats.readabilityScore}%</Badge>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-600">Tone</span>
-                        <Badge variant="secondary">{stats.tone}</Badge>
-                      </div>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Overall Score</span>
+                      <Badge className={`font-bold ${getScoreColor(stats.overallScore)}`}>
+                        <Star className="w-3 h-3 mr-1" />
+                        {stats.overallScore}/100
+                      </Badge>
                     </div>
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-          )}
-
-          {/* Main Editor */}
-          <div className={layoutMode === 'focus' ? 'lg:col-span-4' : layoutMode === 'minimal' ? 'lg:col-span-6' : 'lg:col-span-2'}>
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Editor</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="mb-2 flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant={isListening ? 'destructive' : 'outline'}
-                    onClick={isListening ? stopListening : startListening}
-                    className="mb-2"
-                  >
-                    {isListening ? 'Stop Voice Input' : 'Start Voice Input'}
-                  </Button>
-                  {isListening && <span className="text-red-500 font-semibold">Listening...</span>}
-                </div>
-                <Textarea
-                  ref={textareaRef}
-                  value={content}
-                  onChange={(e) => setContent(e.target.value)}
-                  onSelect={handleTextSelection}
-                  className="min-h-[500px] resize-none border-0 focus:ring-0 text-base leading-relaxed"
-                  placeholder="Start writing your content here..."
-                />
-                {/* Suggestion Filters - removed from here */}
-              </CardContent>
-            </Card>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Words</span>
+                      <Badge variant="default">{stats.wordCount}</Badge>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Characters</span>
+                      <Badge variant="default">{stats.characters}</Badge>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Sentences</span>
+                      <Badge variant="default">{stats.sentences}</Badge>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Readability</span>
+                      <Badge variant="default">{stats.readabilityScore}%</Badge>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Tone</span>
+                      <Badge variant="secondary">{stats.tone}</Badge>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
           </div>
+        )}
 
-          {/* Right Sidebar - Suggestions First, Then Statistics */}
-          {layoutMode !== 'minimal' && (
-            <div className="space-y-6">
-              {/* AI Suggestions - First Priority */}
-              {showSuggestions && (
-              <Card>
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-base flex items-center space-x-2">
-                      <Zap className="w-4 h-4 text-blue-500" />
-                      <span>AI Suggestions</span>
-                      <Badge variant="secondary">{suggestions.length}</Badge>
+        {/* Main Editor */}
+        <div className={layoutMode === 'focus' ? 'lg:col-span-4' : layoutMode === 'minimal' ? 'lg:col-span-6' : 'lg:col-span-2'}>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">Editor</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="mb-2 flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant={isListening ? 'destructive' : 'outline'}
+                  onClick={isListening ? stopListening : startListening}
+                  className="mb-2"
+                >
+                  {isListening ? 'Stop Voice Input' : 'Start Voice Input'}
+                </Button>
+                {isListening && <span className="text-red-500 font-semibold">Listening...</span>}
+              </div>
+              <Textarea
+                ref={textareaRef}
+                value={content}
+                onChange={(e) => {
+                  const words = e.target.value.trim().split(/\s+/).filter(w => w.length > 0);
+                  if (words.length <= WORD_LIMIT) {
+                    setContent(e.target.value);
+                    setWordLimitWarning(false);
+                  } else {
+                    setWordLimitWarning(true);
+                  }
+                }}
+                onSelect={handleTextSelection}
+                className="min-h-[500px] resize-none border-0 focus:ring-0 text-base leading-relaxed"
+                placeholder="Start writing here..."
+              />
+              {wordLimitWarning && (
+                <div className="text-red-500 text-sm mt-2">Word limit of 500 reached.</div>
+              )}
+              {/* Suggestion Filters - removed from here */}
+            </CardContent>
+          </Card>
+          {/* Rewrite UI */}
+          <div className="space-y-2 mt-4">
+            <div className="flex items-center gap-2">
+              <select
+                className="border rounded px-2 py-1 text-sm"
+                value={rewriteTone}
+                onChange={e => setRewriteTone(e.target.value)}
+              >
+                {toneOptions.map(tone => (
+                  <option key={tone} value={tone}>{tone}</option>
+                ))}
+              </select>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={async () => {
+                  setRewriteLoading(true);
+                  setRewriteError(null);
+                  setRewrittenText('');
+                  try {
+                    const res = await fetch('/api/ai/rewrite', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ content, goal: rewriteTone }),
+                    });
+                    if (!res.ok) throw new Error('Rewrite failed');
+                    const data = await res.json();
+                    setRewrittenText(data.rewritten_text || '');
+                  } catch (err: any) {
+                    setRewriteError('Rewrite failed.');
+                  } finally {
+                    setRewriteLoading(false);
+                  }
+                }}
+                disabled={rewriteLoading || !content.trim()}
+                className="mb-2"
+              >
+                {rewriteLoading ? 'Rewriting...' : 'Rewrite'}
+              </Button>
+              {rewriteError && <span className="text-red-500 font-semibold">{rewriteError}</span>}
+            </div>
+            {rewrittenText && (
+              <div className="p-4 border rounded-lg bg-gray-50">
+                <div className="mb-2"><span className="font-semibold">Rewritten ({rewriteTone}):</span> <span className="text-gray-700">{rewrittenText}</span></div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right Sidebar - Suggestions First, Then Statistics */}
+        {layoutMode !== 'minimal' && (
+          <div className="space-y-6">
+            {/* AI Suggestions - First Priority */}
+            {showSuggestions && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center space-x-2">
+                    <Zap className="w-4 h-4 text-blue-500" />
+                    <span>AI Suggestions</span>
+                    <Badge variant="secondary">{suggestions.length}</Badge>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setShowSuggestions(false)}
+                      className="ml-auto"
+                    >
+                      <EyeOff className="w-4 h-4" />
+                    </Button>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {/* Apply All Button */}
+                    {suggestions.length > 1 && (
                       <Button
-                        variant="ghost"
                         size="sm"
-                        onClick={() => setShowSuggestions(false)}
-                        className="ml-auto"
+                        className="mb-2"
+                        variant="default"
+                        onClick={() => {
+                          // Sort suggestions by start position ascending to avoid index shifting
+                          const sorted = [...suggestions].sort((a, b) => (a.position?.start ?? 0) - (b.position?.start ?? 0));
+                          let newContent = content;
+                          let offset = 0;
+                          for (const s of sorted) {
+                            if (s.position) {
+                              const { start, end } = s.position;
+                              const before = newContent.slice(0, start + offset);
+                              const after = newContent.slice(end + offset);
+                              newContent = before + s.suggested_text + after;
+                              offset += s.suggested_text.length - (end - start);
+                            } else {
+                              // fallback: replace first occurrence
+                              let originalText = s.original_text.replace(/^"|"$/g, '').replace(/[’‘]/g, "'").trim();
+                              let suggestedText = s.suggested_text.replace(/^"|"$/g, '').replace(/[’‘]/g, "'").trim();
+                              const regex = new RegExp(`\\b${originalText.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`, 'i');
+                              newContent = newContent.replace(regex, suggestedText);
+                            }
+                          }
+                          setUndoStack(prev => [...prev, content]);
+                          setContent(newContent);
+                          setIsDirty(true);
+                          setSuggestions([]);
+                          setTimeout(autoSaveDocument, 1000);
+                        }}
                       >
-                        <EyeOff className="w-4 h-4" />
+                        Apply All
                       </Button>
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-3">
-                      {isLoading ? (
-                        <div className="text-center py-6 text-gray-500">
-                          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-2"></div>
-                          <p className="text-sm">AI analyzing your text...</p>
-                          <p className="text-xs text-gray-400 mt-1">Using Groq & Hugging Face APIs</p>
-                        </div>
-                      ) : aiStatus === 'error' ? (
-                        <div className="text-center py-6 text-gray-500">
-                          <AlertCircle className="w-8 h-8 mx-auto mb-2 text-red-500" />
-                          <p className="text-sm">AI service temporarily unavailable</p>
-                          <p className="text-xs text-gray-400 mt-1">Please try again later</p>
-                        </div>
-                      ) : suggestions.length === 0 ? (
-                        <div className="text-center py-6 text-gray-500">
-                          <CheckCircle className="w-8 h-8 mx-auto mb-2 text-green-500" />
-                          <p className="text-sm">No AI suggestions at the moment</p>
-                          <p className="text-xs text-gray-400 mt-1">Keep writing to see AI-powered suggestions</p>
-                        </div>
-                      ) : (
-                        suggestions.map((suggestion) => (
-                          <div
-                            key={suggestion.id}
-                            className={`p-3 rounded-lg border ${getSuggestionColor(suggestion.type)}`}
-                          >
-                            <div className="flex items-start space-x-2">
-                              {getSuggestionIcon(suggestion.type)}
-                              <div className="flex-1">
-                                <div className="flex items-center justify-between mb-1">
-                                  <span className="text-xs font-medium text-gray-600 uppercase">
-                                    {suggestion.type}
-                                  </span>
-                                  <span className="text-xs font-medium text-gray-600">
-                                    {suggestion.severity}
-                                  </span>
-                                </div>
-                                <p className="text-sm text-gray-900 mb-1">
-                                  <span className="bg-red-100 text-red-800 px-1 rounded">"{suggestion.original_text}"</span>
-                                  <span className="mx-1">→</span>
-                                  <span className="bg-green-100 text-green-800 px-1 rounded font-medium">"{suggestion.suggested_text}"</span>
-                                </p>
-                                <p className="text-xs text-gray-600 mb-2">
-                                  {suggestion.explanation}
-                                </p>
-                                <div className="flex items-center justify-between">
-                                  <span className="text-xs text-gray-400">
-                                    Confidence: {Math.round(suggestion.confidence * 100)}%
-                                  </span>
-                                <Button
-                                  size="sm"
+                    )}
+                    {isLoading ? (
+                      <div className="text-center py-6 text-gray-500">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto mb-2"></div>
+                        <p className="text-sm">AI analyzing your text...</p>
+                        <p className="text-xs text-gray-400 mt-1">Using Groq & Hugging Face APIs</p>
+                      </div>
+                    ) : aiStatus === 'error' ? (
+                      <div className="text-center py-6 text-gray-500">
+                        <AlertCircle className="w-8 h-8 mx-auto mb-2 text-red-500" />
+                        <p className="text-sm">AI service temporarily unavailable</p>
+                        <p className="text-xs text-gray-400 mt-1">Please try again later</p>
+                      </div>
+                    ) : suggestions.length === 0 ? (
+                      <div className="text-center py-6 text-gray-500">
+                        <CheckCircle className="w-8 h-8 mx-auto mb-2 text-green-500" />
+                        <p className="text-sm">No AI suggestions at the moment</p>
+                        <p className="text-xs text-gray-400 mt-1">Keep writing to see AI-powered suggestions</p>
+                      </div>
+                    ) : (
+                      suggestions.map((suggestion) => (
+                        <div
+                          key={suggestion.id}
+                          className={`p-3 rounded-lg border ${getSuggestionColor(suggestion.type)}`}
+                        >
+                          <div className="flex items-start space-x-2">
+                            {getSuggestionIcon(suggestion.type)}
+                            <div className="flex-1">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs font-medium text-gray-600 uppercase">
+                                  {suggestion.type}
+                                </span>
+                                <span className="text-xs font-medium text-gray-600">
+                                  {suggestion.severity}
+                                </span>
+                              </div>
+                              <p className="text-sm text-gray-900 mb-1">
+                                <span className="bg-red-100 text-red-800 px-1 rounded">"{suggestion.original_text}"</span>
+                                <span className="mx-1">→</span>
+                                <span className="bg-green-100 text-green-800 px-1 rounded font-medium">"{suggestion.suggested_text}"</span>
+                              </p>
+                              <p className="text-xs text-gray-600 mb-2">
+                                {suggestion.explanation}
+                              </p>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs text-gray-400">
+                                  Confidence: {Math.round(suggestion.confidence * 100)}%
+                                </span>
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="sm"
                                     className="text-xs"
-                                  onClick={() => applySuggestion(suggestion)}
-                                >
-                                  Apply
-                                </Button>
+                                    onClick={() => applySuggestion(suggestion)}
+                                  >
+                                    Apply
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-xs"
+                                    onClick={() => setSuggestions(prev => prev.filter(s => s.id !== suggestion.id))}
+                                  >
+                                    Dismiss
+                                  </Button>
                                 </div>
                               </div>
                             </div>
                           </div>
-                        ))
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* Prompt Chaining UI - moved here */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    onClick={runPromptChaining}
-                    disabled={chainingLoading}
-                    className="mb-2"
-                  >
-                    {chainingLoading ? 'Processing...' : 'Correct → Rewrite → Summarize'}
-                  </Button>
-                  {chainingError && <span className="text-red-500 font-semibold">{chainingError}</span>}
-                </div>
-                {chainingResults && (
-                  <div className="p-4 border rounded-lg bg-gray-50">
-                    <div className="mb-2"><span className="font-semibold">Corrected:</span> <span className="text-gray-700">{chainingResults.corrected}</span></div>
-                    <div className="mb-2"><span className="font-semibold">Rewritten ({goal}):</span> <span className="text-gray-700">{chainingResults.rewritten}</span></div>
-                    <div><span className="font-semibold">Summary:</span> <span className="text-gray-700">{chainingResults.summary}</span></div>
+                        </div>
+                      ))
+                    )}
                   </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

@@ -26,7 +26,7 @@ class PlagiarismResult(BaseModel):
     id: str
     source: str
     similarity: float
-    matchedText: str
+    matched_text: str
     url: str
     type: str
 
@@ -50,6 +50,7 @@ async def check_plagiarism(request: PlagiarismRequest):
         
         # Generate mock results based on content analysis
         results = await generate_mock_results(content)
+        print(f"[DEBUG] Plagiarism results for input: {results}")
         
         # Calculate overall score
         total_similarity = sum(result.similarity for result in results)
@@ -109,7 +110,7 @@ async def export_plagiarism_report(format: str = "json", response: PlagiarismRes
     elif format == "txt":
         txt = f"Plagiarism Report\nScore: {response.overallScore}\nProcessing Time: {response.processingTime}s\n\nResults:\n"
         for r in response.results:
-            txt += f"- Source: {r.source}\n  Similarity: {r.similarity}%\n  Matched: {r.matchedText}\n  URL: {r.url}\n  Type: {r.type}\n\n"
+            txt += f"- Source: {r.source}\n  Similarity: {r.similarity}%\n  Matched: {r.matched_text}\n  URL: {r.url}\n  Type: {r.type}\n\n"
         return Response(content=txt, media_type="text/plain", headers={"Content-Disposition": "attachment; filename=plagiarism_report.txt"})
     else:
         raise HTTPException(status_code=400, detail="Unsupported export format.")
@@ -117,14 +118,7 @@ async def export_plagiarism_report(format: str = "json", response: PlagiarismRes
 async def generate_mock_results(content: str) -> List[PlagiarismResult]:
     """Generate realistic mock plagiarism results"""
     results = []
-    
-    # Split content into sentences for analysis
-    sentences = re.split(r'[.!?]+', content)
-    meaningful_sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
-    
-    if not meaningful_sentences:
-        return results
-    
+    import random
     # Mock sources
     sources = [
         {"name": "Wikipedia", "type": "web", "domain": "wikipedia.org"},
@@ -136,32 +130,18 @@ async def generate_mock_results(content: str) -> List[PlagiarismResult]:
         {"name": "Nature Journal", "type": "publication", "domain": "nature.com"},
         {"name": "Educational Resource", "type": "web", "domain": "edu"}
     ]
-    
-    # Generate 1-4 results based on content length
-    num_results = min(4, max(1, len(meaningful_sentences) // 3))
-    
-    for i in range(num_results):
+    if content.strip():
         source = random.choice(sources)
-        sentence = random.choice(meaningful_sentences)
-        
-        # Generate similarity score (higher for common phrases)
-        common_words = ["the", "and", "for", "are", "but", "not", "you", "all", "can", "had", "her", "was", "one", "our"]
-        words = sentence.lower().split()
-        common_count = sum(1 for word in words if word in common_words)
-        
-        # Base similarity on common words and sentence length
-        base_similarity = min(25, (common_count / len(words)) * 100) if words else 0
-        similarity = max(3, base_similarity + random.uniform(-5, 10))
-        
+        snippet = content.strip()[:100] + ("..." if len(content.strip()) > 100 else "")
+        similarity = round(random.uniform(5, 20), 1)
         results.append(PlagiarismResult(
-            id=f"result_{i}",
+            id="result_0",
             source=source["name"],
-            similarity=round(similarity, 1),
-            matchedText=sentence[:100] + "..." if len(sentence) > 100 else sentence,
-            url=f"https://{source['domain']}/article/{i+1}",
+            similarity=similarity,
+            matched_text=snippet,
+            url=f"https://{source['domain']}/article/0",
             type=source["type"]
         ))
-    
     return results
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useSession, signIn, signOut } from "next-auth/react";
+import { useState, useEffect } from "react";
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,100 +20,85 @@ import {
   Clock,
   BarChart3
 } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Bar, BarChart, Legend } from 'recharts';
 
 export default function Dashboard() {
-  const [recentDocuments] = useState([
-    {
-      id: 1,
-      title: 'Marketing Proposal Draft',
-      lastModified: '2 hours ago',
-      wordCount: 1250,
-      score: 89,
-      status: 'In Progress'
-    },
-    {
-      id: 2,
-      title: 'Research Paper - AI Ethics',
-      lastModified: '1 day ago',
-      wordCount: 3500,
-      score: 95,
-      status: 'Completed'
-    },
-    {
-      id: 3,
-      title: 'Email Campaign Copy',
-      lastModified: '3 days ago',
-      wordCount: 800,
-      score: 92,
-      status: 'Reviewed'
-    }
-  ]);
+  const { data: session, status } = useSession();
+  const [showUser, setShowUser] = useState(false);
+  const [recentDocuments, setRecentDocuments] = useState([]);
+  const [userStats, setUserStats] = useState<any>(null);
+  const [insights, setInsights] = useState<any>(null);
+  const [activityChart, setActivityChart] = useState<any[]>([]);
+  const [improvementAreas, setImprovementAreas] = useState<string[]>([]);
+  const [achievements, setAchievements] = useState<any[]>([]);
 
-  const [weeklyStats] = useState({
-    wordsWritten: 12500,
-    documentsCreated: 8,
-    averageScore: 91,
-    improvementRate: 15
-  });
+  useEffect(() => {
+    if (session?.user?.email) {
+      fetch(`/api/users/${encodeURIComponent(session.user.email)}/statistics`)
+        .then(res => res.json())
+        .then(data => setUserStats(data));
+      fetch('/api/ai/insights', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: session.user.email, time_range: 'week' })
+      })
+        .then(res => res.json())
+        .then(data => {
+          setInsights(data);
+          setActivityChart(data.activity_chart || []);
+          setImprovementAreas(data.improvement_areas || []);
+          setAchievements(data.achievements || []);
+        });
+      fetch(`/api/documents?user_id=${encodeURIComponent(session.user.email)}&limit=5`)
+        .then(res => res.json())
+        .then(data => setRecentDocuments(data));
+    }
+  }, [session?.user?.email]);
+
+  if (status === "loading") return <div>Loading...</div>;
+  if (!session) {
+    signIn();
+    return null;
+  }
+  // Only define user after session is confirmed
+  const user = session.user;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-blue-50">
+    <div className="min-h-screen w-full bg-gray-50">
       {/* Header */}
-      <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center space-x-2">
-                <div className="w-8 h-8 bg-green-600 rounded-full flex items-center justify-center">
-                  <CheckCircle className="w-5 h-5 text-white" />
-                </div>
-                <span className="text-xl font-bold text-gray-900">GrammarlyClone</span>
-              </div>
-              
-              <nav className="hidden md:flex space-x-6">
-                <Link href="/" className="text-gray-700 hover:text-green-600 transition-colors">
-                  Dashboard
-                </Link>
-                <Link href="/editor" className="text-gray-700 hover:text-green-600 transition-colors">
-                  Editor
-                </Link>
-                <Link href="/insights" className="text-gray-700 hover:text-green-600 transition-colors">
-                  Insights
-                </Link>
-                <Link href="/plagiarism" className="text-gray-700 hover:text-green-600 transition-colors">
-                  Plagiarism
-                </Link>
-              </nav>
+      <header className="flex justify-between items-center p-4 bg-white shadow">
+        <div className="text-2xl font-bold tracking-tight text-blue-700">BonMot</div>
+        <div className="relative flex items-center gap-2">
+          {user && (
+            <button
+              className="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100"
+              onClick={() => setShowUser((v) => !v)}
+              onBlur={() => setTimeout(() => setShowUser(false), 200)}
+            >
+              <User className="w-5 h-5" />
+              <span className="font-medium">{user.name || user.email}</span>
+            </button>
+          )}
+          <button
+            className="ml-2 px-3 py-2 rounded bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 transition"
+            onClick={() => signOut({ callbackUrl: '/login' })}
+          >
+            Logout
+          </button>
+          {showUser && user && (
+            <div className="absolute right-0 mt-2 w-64 bg-white border rounded shadow p-4 z-10">
+              <div className="mb-2 font-bold text-lg">User Details</div>
+              <div><b>Email:</b> {user.email}</div>
+              {user.name && <div><b>Name:</b> {user.name}</div>}
+              {user.image && <div className="mt-2"><img src={user.image} alt="avatar" className="w-12 h-12 rounded-full" /></div>}
+              {/* Add more fields if available */}
             </div>
-
-            <div className="flex items-center space-x-4">
-              <div className="relative">
-                <Search className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Search documents..."
-                  className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                />
-              </div>
-              
-              <Button variant="ghost" size="icon">
-                <Bell className="w-5 h-5" />
-              </Button>
-              
-              <Button variant="ghost" size="icon">
-                <Settings className="w-5 h-5" />
-              </Button>
-              
-              <Button variant="ghost" size="icon">
-                <User className="w-5 h-5" />
-              </Button>
-            </div>
-          </div>
+          )}
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="w-full px-4 py-6">
         {/* Welcome Section */}
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Welcome back!</h1>
@@ -158,61 +144,71 @@ export default function Dashboard() {
           </Link>
         </div>
 
-        {/* Weekly Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+        {/* Advanced Analytics Section */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+          {/* Writing Activity Chart */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Words Written</CardTitle>
+              <CardTitle className="text-sm font-medium text-gray-600">Writing Activity (Last 7 Days)</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-gray-900">{weeklyStats.wordsWritten.toLocaleString()}</div>
-              <div className="flex items-center text-sm text-green-600 mt-1">
-                <TrendingUp className="w-4 h-4 mr-1" />
-                <span>+12% from last week</span>
-              </div>
+            <CardContent style={{ height: 250 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={activityChart} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" fontSize={12} />
+                  <YAxis fontSize={12} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="words" fill="#3b82f6" name="Words" />
+                </BarChart>
+              </ResponsiveContainer>
             </CardContent>
           </Card>
-
+          {/* Score Trend Chart */}
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Documents</CardTitle>
+              <CardTitle className="text-sm font-medium text-gray-600">Score Trend (Last 7 Days)</CardTitle>
             </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-gray-900">{weeklyStats.documentsCreated}</div>
-              <div className="flex items-center text-sm text-blue-600 mt-1">
-                <FileText className="w-4 h-4 mr-1" />
-                <span>Created this week</span>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Average Score</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-gray-900">{weeklyStats.averageScore}%</div>
-              <div className="flex items-center text-sm text-green-600 mt-1">
-                <Target className="w-4 h-4 mr-1" />
-                <span>Above average</span>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-gray-600">Improvement</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold text-gray-900">+{weeklyStats.improvementRate}%</div>
-              <div className="flex items-center text-sm text-purple-600 mt-1">
-                <TrendingUp className="w-4 h-4 mr-1" />
-                <span>This month</span>
-              </div>
+            <CardContent style={{ height: 250 }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={activityChart} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" fontSize={12} />
+                  <YAxis fontSize={12} />
+                  <Tooltip />
+                  <Legend />
+                  <Line type="monotone" dataKey="score" stroke="#10b981" name="Score" strokeWidth={2} dot={{ r: 3 }} />
+                </LineChart>
+              </ResponsiveContainer>
             </CardContent>
           </Card>
         </div>
-
+        {/* Achievements */}
+        <div className="mb-8">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-gray-600">Achievements</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {achievements.length === 0 ? (
+                <div className="text-gray-500">No achievements yet.</div>
+              ) : (
+                <div className="flex flex-wrap gap-4">
+                  {achievements.map((ach, idx) => (
+                    <div key={idx} className={`flex items-center gap-2 px-3 py-2 rounded border ${ach.unlocked ? 'border-green-500 bg-green-50' : 'border-gray-300 bg-gray-100 opacity-60'}`}>
+                      <span className="text-2xl">{ach.icon}</span>
+                      <div>
+                        <div className="font-semibold">{ach.title}</div>
+                        <div className="text-xs text-gray-500">{ach.description}</div>
+                      </div>
+                      {ach.unlocked && <CheckCircle className="w-4 h-4 text-green-500 ml-2" />}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
         {/* Inspiration Card Placeholder */}
         <Card className="bg-gradient-to-r from-green-100 to-blue-100 border-0 shadow-none mb-8">
           <CardHeader>

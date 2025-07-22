@@ -1,9 +1,11 @@
 # MongoDB Database Configuration
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient
+from pymongo import ReturnDocument
 from datetime import datetime
 import os
 from typing import Optional, List, Dict
+from bson import ObjectId
 
 class DatabaseManager:
     def __init__(self):
@@ -41,7 +43,7 @@ class DatabaseManager:
             self.client.close()
     
     # Document operations
-    async def save_document(self, user_id: str, title: str, content: str, document_id: Optional[str] = None):
+    async def save_document(self, user_id: str, title: str, content: str, score: int = 0, document_id: Optional[str] = None):
         """Save or update a document"""
         document = {
             "user_id": user_id,
@@ -49,6 +51,7 @@ class DatabaseManager:
             "content": content,
             "word_count": len(content.split()),
             "character_count": len(content),
+            "score": score,
             "last_modified": datetime.utcnow()
         }
         
@@ -76,7 +79,7 @@ class DatabaseManager:
     
     async def delete_document(self, document_id: str):
         """Delete a document"""
-        await self.db.documents.delete_one({"_id": document_id})
+        await self.db.documents.delete_one({"_id": ObjectId(document_id)})
     
     # Suggestions operations
     async def save_suggestions(self, document_id: str, suggestions: List[Dict]):
@@ -186,6 +189,25 @@ class DatabaseManager:
         
         cursor = self.db.documents.aggregate(pipeline)
         return await cursor.to_list(length=None)
+
+    # User management
+    async def upsert_user(self, email: str, extra_fields: dict = None):
+        now = datetime.utcnow()
+        user_doc = {
+            "email": email,
+            "last_login": now,
+        }
+        if extra_fields:
+            user_doc.update(extra_fields)
+        return await self.db.users.find_one_and_update(
+            {"email": email},
+            {"$setOnInsert": {"created_at": now}, "$set": user_doc},
+            upsert=True,
+            return_document=ReturnDocument.AFTER
+        )
+
+    async def get_user(self, email: str):
+        return await self.db.users.find_one({"email": email})
 
 # Global database manager instance
 db_manager = DatabaseManager()

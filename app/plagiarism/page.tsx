@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -19,6 +19,8 @@ import {
   Download,
   Share
 } from 'lucide-react';
+import { useRef } from 'react';
+import { Document, Packer, Paragraph, TextRun } from 'docx';
 
 interface PlagiarismResult {
   id: string;
@@ -34,12 +36,35 @@ export default function PlagiarismChecker() {
   const [isChecking, setIsChecking] = useState(false);
   const [results, setResults] = useState<PlagiarismResult[]>([]);
   const [overallScore, setOverallScore] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [rawApiResponse, setRawApiResponse] = useState<any>(null);
+  const [recentChecks, setRecentChecks] = useState<any[]>([]);
+
+  // Load recent checks from localStorage on mount
+  useEffect(() => {
+    const checks = JSON.parse(localStorage.getItem('plagiarism_recent_checks') || '[]');
+    setRecentChecks(checks);
+  }, []);
+
+  // Save a recent check to localStorage
+  const saveRecentCheck = (content: string, score: number) => {
+    const checks = JSON.parse(localStorage.getItem('plagiarism_recent_checks') || '[]');
+    const newCheck = {
+      content: content.slice(0, 60) + (content.length > 60 ? '...' : ''),
+      score,
+      date: new Date().toISOString(),
+    };
+    const updated = [newCheck, ...checks].slice(0, 5);
+    localStorage.setItem('plagiarism_recent_checks', JSON.stringify(updated));
+    setRecentChecks(updated);
+  };
 
   const handleCheck = async () => {
     if (!content.trim()) return;
     setIsChecking(true);
     try {
-      const response = await fetch('http://localhost:8000/api/ai/plagiarism/check', {
+      const response = await fetch('/api/ai/plagiarism/check', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, check_web: true, check_academic: true }),
@@ -52,17 +77,19 @@ export default function PlagiarismChecker() {
       }
       const data = await response.json();
       console.log('Plagiarism API Response:', data); // Debug log
+      setRawApiResponse(data);
       setOverallScore(data.overall_score);
       setResults(
-        (data.matches || []).map((match: any) => ({
+        (data.matches || data.results || []).map((match: any) => ({
           id: match.id,
           source: match.source,
           similarity: match.similarity,
-          matchedText: match.matched_text,
+          matchedText: match.matched_text || match.matchedText || '',
           url: match.url,
           type: match.type,
         }))
       );
+      saveRecentCheck(content, data.overall_score);
     } catch (error) {
       console.error('Plagiarism Fetch Error:', error);
       setResults([]);
@@ -70,6 +97,102 @@ export default function PlagiarismChecker() {
     } finally {
       setIsChecking(false);
     }
+  };
+
+  // File reading helpers
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUploadError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const ext = file.name.split('.').pop()?.toLowerCase();
+    if (ext === 'txt') {
+      const text = await file.text();
+      setContent(text);
+    } else if (ext === 'docx') {
+      try {
+        // @ts-ignore
+        const docx = await import('docx');
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          const arrayBuffer = ev.target?.result;
+          if (!arrayBuffer) return;
+          // @ts-ignore
+          const doc = await docx.Document.load(arrayBuffer);
+          // @ts-ignore
+          const text = doc.getBody().getText();
+          setContent(text);
+        };
+        reader.readAsArrayBuffer(file);
+      } catch {
+        setUploadError('DOCX support not available in this environment.');
+      }
+    } else if (ext === 'pdf') {
+      try {
+        // @ts-ignore
+        const pdfjsLib = await import('pdfjs-dist/build/pdf');
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          const typedarray = new Uint8Array(ev.target?.result as ArrayBuffer);
+          // @ts-ignore
+          const pdf = await pdfjsLib.getDocument({ data: typedarray }).promise;
+          let text = '';
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const content = await page.getTextContent();
+            text += content.items.map((item: any) => item.str).join(' ') + '\n';
+          }
+          setContent(text);
+        };
+        reader.readAsArrayBuffer(file);
+      } catch {
+        setUploadError('PDF support not available in this environment.');
+      }
+    } else {
+      setUploadError('Unsupported file type. Only .txt, .docx, .pdf supported.');
+    }
+  };
+
+  const triggerFileInput = () => fileInputRef.current?.click();
+
+  // Export report as Word docx
+  const handleExport = async () => {
+    const doc = new Document({
+      sections: [
+        {
+          properties: {},
+          children: [
+            new Paragraph({
+              children: [
+                new TextRun({ text: 'Plagiarism Report', bold: true, size: 32 }),
+              ],
+              spacing: { after: 300 },
+            }),
+            new Paragraph({ text: `Originality Score: ${overallScore}%`, spacing: { after: 200 } }),
+            new Paragraph({ text: 'Checked Content:', bold: true }),
+            new Paragraph({ text: content, spacing: { after: 300 } }),
+            new Paragraph({ text: 'Results:', bold: true, spacing: { after: 200 } }),
+            ...results.map((result, idx) =>
+              new Paragraph({
+                children: [
+                  new TextRun({ text: `${idx + 1}. Source: ${result.source} (${result.type})`, bold: true }),
+                  new TextRun({ text: `\nSimilarity: ${result.similarity}%` }),
+                  new TextRun({ text: `\nMatched Text: "${result.matchedText}"` }),
+                  new TextRun({ text: `\nURL: ${result.url}` }),
+                ],
+                spacing: { after: 200 },
+              })
+            ),
+          ],
+        },
+      ],
+    });
+    const blob = await Packer.toBlob(doc);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'plagiarism_report.docx';
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const getScoreColor = (score: number) => {
@@ -94,10 +217,10 @@ export default function PlagiarismChecker() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 w-full">
       {/* Header */}
       <header className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="w-full px-4 py-0">
           <div className="flex justify-between items-center h-16">
             <div className="flex items-center space-x-4">
               <Link href="/">
@@ -112,20 +235,27 @@ export default function PlagiarismChecker() {
             </div>
 
             <div className="flex items-center space-x-2">
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" onClick={triggerFileInput}>
                 <Upload className="w-4 h-4 mr-2" />
                 Upload File
               </Button>
-              <Button variant="outline" size="sm">
+              <Button variant="outline" size="sm" onClick={handleExport}>
                 <Download className="w-4 h-4 mr-2" />
                 Export Report
               </Button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".txt,.docx,.pdf"
+                className="hidden"
+                onChange={handleFileChange}
+              />
             </div>
           </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="w-full px-4 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Input Section */}
           <div className="lg:col-span-2">
@@ -313,9 +443,10 @@ export default function PlagiarismChecker() {
                   <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
                     <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
                     <p className="text-sm text-gray-600 mb-2">Drop files here or click to browse</p>
-                    <Button variant="outline" size="sm">
+                    <Button variant="outline" size="sm" onClick={triggerFileInput}>
                       Select Files
                     </Button>
+                    {uploadError && <div className="text-red-500 text-xs mt-2">{uploadError}</div>}
                   </div>
                 </CardContent>
               </Card>
@@ -327,19 +458,19 @@ export default function PlagiarismChecker() {
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-3">
-                    {[
-                      { name: 'Research Paper Draft', score: 92, date: '2 hours ago' },
-                      { name: 'Article Review', score: 88, date: '1 day ago' },
-                      { name: 'Essay Assignment', score: 95, date: '3 days ago' }
-                    ].map((item, index) => (
-                      <div key={index} className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-50">
-                        <div>
-                          <div className="font-medium text-sm">{item.name}</div>
-                          <div className="text-xs text-gray-500">{item.date}</div>
+                    {recentChecks.length === 0 ? (
+                      <div className="text-gray-500 text-sm">No recent checks yet.</div>
+                    ) : (
+                      recentChecks.map((item, index) => (
+                        <div key={index} className="flex items-center justify-between p-2 rounded-lg hover:bg-gray-50">
+                          <div>
+                            <div className="font-medium text-sm">{item.content}</div>
+                            <div className="text-xs text-gray-500">{new Date(item.date).toLocaleString()}</div>
+                          </div>
+                          <Badge variant="outline">{item.score}%</Badge>
                         </div>
-                        <Badge variant="outline">{item.score}%</Badge>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 </CardContent>
               </Card>

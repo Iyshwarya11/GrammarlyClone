@@ -3,113 +3,36 @@ import json
 import re
 import logging
 import asyncio
-import aiohttp
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Body
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Body, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+import aiohttp
+from database import db_manager  # Import the DatabaseManager instance
+from pymongo import ReturnDocument
+from datetime import timezone
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load API keys from environment variables (do NOT hardcode keys here)
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "your-groq-api-key-here")
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "your-huggingface-api-key-here")
-# Tip: Set these in your environment or a .env file for security.
-# Example (on Windows):
-#   set GROQ_API_KEY=your-groq-key-here
-#   set HUGGINGFACE_API_KEY=your-hf-key-here
-
-# In-memory storage (replace with database in production)
-documents_db = {}
-analytics_db = {}
+# Load API keys from environment variables
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "your-openai-api-key-here")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     logger.info("API Server starting up...")
-    initialize_sample_data()
+    await db_manager.connect()
     yield
-    # Shutdown
     logger.info("API Server shutting down...")
+    await db_manager.close()
 
-def initialize_sample_data():
-    """Initialize sample data for frontend testing"""
-    sample_docs = [
-        {
-            "id": "1",
-            "user_id": "default",
-            "title": "Marketing Proposal Draft",
-            "content": "This is a comprehensive marketing proposal for our new product launch. The strategy includes digital marketing, social media campaigns, and traditional advertising methods.",
-            "word_count": 1250,
-            "character_count": 7500,
-            "score": 89,
-            "status": "In Progress",
-            "created_at": (datetime.now() - timedelta(hours=2)).isoformat(),
-            "last_modified": (datetime.now() - timedelta(hours=2)).isoformat(),
-            "analytics": {
-                "readability_score": 75.0,
-                "sentiment_score": 0.2,
-                "tone_analysis": {"professional": 0.8, "formal": 0.6, "neutral": 0.4},
-                "complexity_score": 65.0,
-                "engagement_score": 70.0,
-                "word_diversity": 85.0,
-                "sentence_variety": 7.2
-            }
-        },
-        {
-            "id": "2",
-            "user_id": "default",
-            "title": "Research Paper - AI Ethics",
-            "content": "Artificial intelligence ethics is a critical field that examines the moral implications of AI systems. This paper explores the key ethical considerations in AI development and deployment.",
-            "word_count": 3500,
-            "character_count": 21000,
-            "score": 95,
-            "status": "Completed",
-            "created_at": (datetime.now() - timedelta(days=1)).isoformat(),
-            "last_modified": (datetime.now() - timedelta(days=1)).isoformat(),
-            "analytics": {
-                "readability_score": 82.0,
-                "sentiment_score": 0.1,
-                "tone_analysis": {"formal": 0.9, "professional": 0.8, "neutral": 0.7},
-                "complexity_score": 78.0,
-                "engagement_score": 65.0,
-                "word_diversity": 92.0,
-                "sentence_variety": 8.5
-            }
-        },
-        {
-            "id": "3",
-            "user_id": "default",
-            "title": "Email Campaign Copy",
-            "content": "Subject: Exciting New Features Coming Soon! Dear valued customers, we're thrilled to announce some amazing updates to our platform that will enhance your experience.",
-            "word_count": 800,
-            "character_count": 4800,
-            "score": 92,
-            "status": "Reviewed",
-            "created_at": (datetime.now() - timedelta(days=3)).isoformat(),
-            "last_modified": (datetime.now() - timedelta(days=3)).isoformat(),
-            "analytics": {
-                "readability_score": 88.0,
-                "sentiment_score": 0.6,
-                "tone_analysis": {"casual": 0.7, "professional": 0.5, "neutral": 0.3},
-                "complexity_score": 45.0,
-                "engagement_score": 85.0,
-                "word_diversity": 78.0,
-                "sentence_variety": 6.8
-            }
-        }
-    ]
-    
-    for doc in sample_docs:
-        documents_db[doc["id"]] = doc
 # Create main application
 app = FastAPI(
     title="GrammarlyClone AI API",
@@ -233,6 +156,7 @@ class InsightResponse(BaseModel):
     performance_metrics: Dict[str, Any]
     improvement_areas: List[str]
     achievements: List[Dict[str, Any]]
+    activity_chart: List[Dict[str, Any]]
 
 class RewriteRequest(BaseModel):
     content: str
@@ -255,9 +179,93 @@ async def health_check():
         "timestamp": datetime.now().isoformat(),
         "version": "1.0.0",
         "services": {
-            "groq_api": "available" if GROQ_API_KEY and GROQ_API_KEY != "your-groq-api-key-here" else "not_configured",
-            "huggingface_api": "available" if HUGGINGFACE_API_KEY and HUGGINGFACE_API_KEY != "your-huggingface-api-key-here" else "not_configured"
+            "openai_api": "available" if OPENAI_API_KEY and OPENAI_API_KEY != "your-openai-api-key-here" else "not_configured",
+            "mongodb": "available"
         }
+    }
+
+async def analyze_text_with_ai(content: str) -> AIAnalytics:
+    """Analyze text using AI for various metrics"""
+    try:
+        # Calculate basic metrics
+        words = content.split()
+        sentences = re.split(r'[.!?]+', content)
+        sentences = [s.strip() for s in sentences if s.strip()]
+        # Readability score (simplified Flesch Reading Ease)
+        if sentences and words:
+            avg_sentence_length = len(words) / len(sentences)
+            readability_score = max(0, min(100, 100 - (avg_sentence_length * 1.5)))
+        else:
+            readability_score = 50
+        # Sentiment analysis (simplified)
+        positive_words = ["good", "great", "excellent", "amazing", "wonderful", "fantastic"]
+        negative_words = ["bad", "terrible", "awful", "horrible", "disappointing"]
+        positive_count = sum(1 for word in words if word.lower() in positive_words)
+        negative_count = sum(1 for word in words if word.lower() in negative_words)
+        if words:
+            sentiment_score = (positive_count - negative_count) / len(words) * 100
+        else:
+            sentiment_score = 0
+        # Tone analysis
+        formal_words = ["therefore", "furthermore", "consequently", "utilize", "facilitate"]
+        informal_words = ["gonna", "wanna", "gotta", "cool", "awesome"]
+        formal_count = sum(1 for word in words if word.lower() in formal_words)
+        informal_count = sum(1 for word in words if word.lower() in informal_words)
+        tone_analysis = {
+            "formal": formal_count / max(len(words), 1) * 100,
+            "informal": informal_count / max(len(words), 1) * 100,
+            "neutral": 100 - (formal_count + informal_count) / max(len(words), 1) * 100
+        }
+        # Complexity score
+        unique_words = len(set(words))
+        complexity_score = (unique_words / max(len(words), 1)) * 100
+        # Engagement score
+        question_count = content.count('?')
+        exclamation_count = content.count('!')
+        engagement_score = min(100, (question_count + exclamation_count) * 10)
+        # Word diversity
+        word_diversity = (unique_words / max(len(words), 1)) * 100
+        # Sentence variety
+        sentence_lengths = [len(s.split()) for s in sentences]
+        if sentence_lengths:
+            sentence_variety = (max(sentence_lengths) - min(sentence_lengths)) / max(max(sentence_lengths), 1) * 100
+        else:
+            sentence_variety = 0
+        return AIAnalytics(
+            readability_score=readability_score,
+            sentiment_score=sentiment_score,
+            tone_analysis=tone_analysis,
+            complexity_score=complexity_score,
+            engagement_score=engagement_score,
+            word_diversity=word_diversity,
+            sentence_variety=sentence_variety
+        )
+    except Exception as e:
+        logger.error(f"Error analyzing text: {e}")
+        return AIAnalytics(
+            readability_score=50,
+            sentiment_score=0,
+            tone_analysis={"formal": 0, "informal": 0, "neutral": 100},
+            complexity_score=50,
+            engagement_score=0,
+            word_diversity=50,
+            sentence_variety=0
+        )
+
+def calculate_text_stats(content: str) -> Dict[str, Any]:
+    """Calculate basic text statistics"""
+    words = content.split()
+    sentences = re.split(r'[.!?]+', content)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    return {
+        "word_count": len(words),
+        "character_count": len(content),
+        "sentence_count": len(sentences),
+        "paragraph_count": len([p for p in content.split('\n\n') if p.strip()]),
+        "average_words_per_sentence": len(words) / max(len(sentences), 1),
+        "reading_time_minutes": len(words) / 200,  # Average reading speed
+        "unique_words": len(set(words)),
+        "vocabulary_diversity": len(set(words)) / max(len(words), 1)
     }
 
 # Document management endpoints
@@ -265,41 +273,20 @@ async def health_check():
 async def create_document(document: DocumentCreate):
     """Create a new document"""
     try:
-        doc_id = f"doc_{len(documents_db) + 1}"
-        word_count = len(document.content.split())
-        
-        # Perform initial AI analysis
+        logger.info(f"Received request to create document: {document}")
         analytics = await analyze_text_with_ai(document.content)
-        
-        # Calculate score based on analytics
         score = calculate_document_score(analytics)
-        
-        doc_data = {
-            "id": document_id,
-            "user_id": document.user_id,
-            "title": document.title,
-            "content": document.content,
-            "word_count": len(document.content.split()),
-            "character_count": len(document.content),
-            "score": score,
-            "status": "In Progress",
-            "analytics": analytics,
-            "created_at": datetime.now().isoformat(),
-            "user_id": document.user_id
-        }
-        
-        documents_db[doc_id] = new_doc
-        
-        # Store analytics for insights
-        await store_analytics(document.user_id, document_id, analytics)
-        
+        logger.info(f"Calculated score for document: {score}")
+        doc_id = await db_manager.save_document(document.user_id, document.title, document.content, score)
+        logger.info(f"Saving document with score: {score}")
+        await db_manager.save_suggestions(doc_id, [])  # Placeholder for suggestions if needed
+        logger.info(f"Document created in MongoDB with id: {doc_id}")
         return {
-            "document_id": document_id, 
+            "document_id": doc_id, 
             "message": "Document created successfully", 
             "score": score,
             "analytics": analytics.dict() if hasattr(analytics, 'dict') else analytics
         }
-        return DocumentResponse(**new_doc)
     except Exception as e:
         logger.error(f"Error creating document: {e}")
         raise HTTPException(status_code=500, detail="Failed to create document")
@@ -308,12 +295,150 @@ async def create_document(document: DocumentCreate):
 async def get_documents(user_id: str = "default", limit: int = 10):
     """Get all documents for a user"""
     try:
-        user_docs = [doc for doc in documents_db.values() if doc.get("user_id") == user_id]
-        sorted_docs = sorted(user_docs, key=lambda x: x["last_modified"], reverse=True)
-        return [DocumentResponse(**doc) for doc in sorted_docs[:limit]]
+        docs = await db_manager.get_user_documents(user_id, limit)
+        return [DocumentResponse(
+            id=str(doc.get("_id", doc.get("id"))),
+            title=doc["title"],
+            content=doc["content"],
+            word_count=doc["word_count"],
+            score=doc.get("score", 0),
+            status=doc.get("status", "In Progress"),
+            last_modified=str(doc.get("last_modified", "")),
+            created_at=str(doc.get("created_at", ""))
+        ) for doc in docs]
     except Exception as e:
         logger.error(f"Error fetching documents: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch documents")
+
+@app.get("/api/documents/{document_id}")
+async def get_document(document_id: str):
+    """Get a specific document and update last_modified to now for history tracking"""
+    try:
+        doc = await db_manager.get_document(document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return DocumentResponse(
+            id=str(doc.get("_id", doc.get("id"))),
+            title=doc["title"],
+            content=doc["content"],
+            word_count=doc["word_count"],
+            score=doc.get("score", 0),
+            status=doc.get("status", "In Progress"),
+            last_modified=str(doc.get("last_modified", "")),
+            created_at=str(doc.get("created_at", ""))
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch document")
+
+@app.put("/api/documents/{document_id}")
+async def update_document(document_id: str, document: DocumentUpdate):
+    """Update a document"""
+    try:
+        doc = await db_manager.get_document(document_id)
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        title = document.title if document.title is not None else doc["title"]
+        content = document.content if document.content is not None else doc["content"]
+        await db_manager.save_document(doc["user_id"], title, content, document_id=document_id)
+        updated_doc = await db_manager.get_document(document_id)
+        return DocumentResponse(
+            id=str(updated_doc.get("_id", updated_doc.get("id"))),
+            title=updated_doc["title"],
+            content=updated_doc["content"],
+            word_count=updated_doc["word_count"],
+            score=updated_doc.get("score", 0),
+            status=updated_doc.get("status", "In Progress"),
+            last_modified=str(updated_doc.get("last_modified", "")),
+            created_at=str(updated_doc.get("created_at", ""))
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update document")
+
+@app.delete("/api/documents/{document_id}")
+async def delete_document(document_id: str):
+    """Delete a document"""
+    try:
+        await db_manager.delete_document(document_id)
+        return {"message": "Document deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete document")
+
+# AI Suggestions endpoint (OpenAI only)
+async def openai_chat_completion(prompt: str, max_tokens: int = 800, temperature: float = 0.3) -> str:
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }
+    async with aiohttp.ClientSession() as session:
+        async with session.post(url, headers=headers, json=payload, timeout=20) as response:
+            if response.status == 200:
+                data = await response.json()
+                return data["choices"][0]["message"]["content"].strip()
+            else:
+                text = await response.text()
+                logger.error(f"OpenAI API error: {response.status} {text}")
+                raise HTTPException(status_code=500, detail="OpenAI API error")
+
+@app.post("/api/ai/suggestions", response_model=AISuggestionResponse)
+async def get_ai_suggestions(text_input: AITextInput):
+    start_time = datetime.now()
+    try:
+        prompt = (
+            f"You are a professional writing assistant. Analyze the following text and provide comprehensive writing suggestions to improve {text_input.goal} for a {text_input.tone} tone targeting {text_input.audience} audience.\n\nText: \"{text_input.content}\"\n\nRespond ONLY with a valid JSON object in the following format:\n{{\n  \"suggestions\": [\n    {{\n      \"type\": \"spelling|grammar|clarity|tone|engagement|style|punctuation|tense\",\n      \"category\": \"specific category\",\n      \"original_text\": \"exact text to be changed\",\n      \"suggested_text\": \"improved version\",\n      \"explanation\": \"detailed explanation of why this change improves the writing\",\n      \"confidence\": 0.85,\n      \"severity\": \"low|medium|high\"\n    }}\n  ]\n}}\nNO explanation, NO extra text, ONLY the JSON object."
+        )
+        response_text = await openai_chat_completion(prompt)
+        # Fix indentation here
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            json_str = json_match.group(0)
+            parsed_response = json.loads(json_str)
+            suggestions = []
+            for i, suggestion in enumerate(parsed_response.get("suggestions", [])):
+                original_text = suggestion.get("original_text", "")
+                suggested_text = suggestion.get("suggested_text", "")
+                position = {"start": 0, "end": len(original_text)}
+                if original_text and original_text in text_input.content:
+                    start_pos = text_input.content.find(original_text)
+                    if start_pos != -1:
+                        position = {"start": start_pos, "end": start_pos + len(original_text)}
+                suggestions.append(AISuggestion(
+                    id=f"openai_suggestion_{i}",
+                    type=suggestion.get("type", "general"),
+                    category=suggestion.get("category", "improvement"),
+                    original_text=original_text,
+                    suggested_text=suggested_text,
+                    explanation=suggestion.get("explanation", ""),
+                    confidence=suggestion.get("confidence", 0.8),
+                    position=position,
+                    severity=suggestion.get("severity", "medium")
+                ))
+        else:
+            suggestions = []
+        analytics = await analyze_text_with_ai(text_input.content)
+        stats = calculate_text_stats(text_input.content)
+        processing_time = (datetime.now() - start_time).total_seconds()
+        return AISuggestionResponse(
+            suggestions=suggestions,
+            analytics=analytics,
+            stats=stats,
+            processing_time=processing_time
+        )
+    except Exception as e:
+        logger.error(f"Error getting AI suggestions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get AI suggestions")
 
 def calculate_document_score(analytics) -> int:
     """Calculate overall document score from analytics"""
@@ -332,601 +457,11 @@ def calculate_document_score(analytics) -> int:
         return int(max(0, min(100, score)))
     except:
         return 75  # Default score
-@app.get("/api/documents/{document_id}")
-async def get_document(document_id: str):
-    """Get a specific document and update last_modified to now for history tracking"""
-    try:
-        if document_id not in documents_db:
-            raise HTTPException(status_code=404, detail="Document not found")
-        # Update last_modified to now
-        documents_db[document_id]["last_modified"] = datetime.now().isoformat()
-        return DocumentResponse(**documents_db[document_id])
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error fetching document {document_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch document")
-
-@app.put("/api/documents/{document_id}")
-async def update_document(document_id: str, document: DocumentUpdate):
-    """Update a document"""
-    try:
-        if document_id not in documents_db:
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        current_doc = documents_db[document_id]
-        
-        if document.title is not None:
-            current_doc["title"] = document.title
-        
-        if document.content is not None:
-            current_doc["content"] = document.content
-            current_doc["word_count"] = len(document.content.split())
-        
-        current_doc["last_modified"] = datetime.now().isoformat()
-        
-        documents_db[document_id] = current_doc
-        
-        return DocumentResponse(**current_doc)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error updating document {document_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to update document")
-
-@app.delete("/api/documents/{document_id}")
-async def delete_document(document_id: str):
-    """Delete a document"""
-    try:
-        if document_id not in documents_db:
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        del documents_db[document_id]
-        return {"message": "Document deleted successfully"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error deleting document {document_id}: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete document")
-
-# AI Suggestions endpoint
-@app.post("/api/ai/suggestions", response_model=AISuggestionResponse)
-async def get_ai_suggestions(text_input: AITextInput):
-    print("DEBUG: /api/ai/suggestions called with:", text_input.content)
-    start_time = datetime.now()
-    try:
-        # Get AI suggestions
-        ai_suggestions = await try_huggingface_api(
-            text_input.content,
-            text_input.goal,
-            text_input.tone,
-            text_input.audience
-        )
-        # Get fallback suggestions
-        fallback_suggestions = get_fallback_suggestions(text_input.content)
-        # Combine both, filtering duplicates
-        all_suggestions = ai_suggestions + [
-            s for s in fallback_suggestions
-            if not any(
-                s.original_text == ai_s.original_text and s.suggested_text == ai_s.suggested_text
-                for ai_s in ai_suggestions
-            )
-        ]
-        analytics = await analyze_text_with_ai(text_input.content)
-        stats = calculate_text_stats(text_input.content)
-        processing_time = (datetime.now() - start_time).total_seconds()
-        return AISuggestionResponse(
-            suggestions=all_suggestions,
-            analytics=analytics,
-            stats=stats,
-            processing_time=processing_time
-        )
-    except Exception as e:
-        logger.error(f"Error getting AI suggestions: {e}")
-        # On error, use fallback only
-        suggestions = get_fallback_suggestions(text_input.content)
-        analytics = await analyze_text_with_ai(text_input.content)
-        stats = calculate_text_stats(text_input.content)
-        processing_time = (datetime.now() - start_time).total_seconds()
-        return AISuggestionResponse(
-            suggestions=suggestions,
-            analytics=analytics,
-            stats=stats,
-            processing_time=processing_time
-        )
-
-async def try_groq_api(content: str, goal: str, tone: str, audience: str) -> List[AISuggestion]:
-    """Try to get suggestions using Groq API"""
-    try:
-        logger.info(f"GROQ_API_KEY is set: {GROQ_API_KEY[:8]}..." if GROQ_API_KEY and GROQ_API_KEY != "your-groq-api-key-here" else "GROQ_API_KEY is not set or is default.")
-        if GROQ_API_KEY == "your-groq-api-key-here":
-            logger.warning("Groq API key is not set. Skipping Groq API call.")
-            return []
-        groq_url = "https://api.groq.com/openai/v1/chat/completions"
-        prompt = f"""
-You are a professional writing assistant. Analyze the following text word by word and provide comprehensive writing suggestions to improve {goal} for a {tone} tone targeting {audience} audience.
-
-Text: "{content}"
-
-Respond ONLY with a valid JSON object in the following format:
-{{
-  "suggestions": [
-    {{
-      "type": "spelling|grammar|clarity|tone|engagement|style|punctuation|tense",
-      "category": "specific category",
-      "original_text": "exact text to be changed",
-      "suggested_text": "improved version",
-      "explanation": "detailed explanation of why this change improves the writing",
-      "confidence": 0.85,
-      "severity": "low|medium|high"
-    }}
-  ]
-}}
-NO explanation, NO extra text, ONLY the JSON object.
-"""
-        headers = {
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        logger.info(f"Sending Groq API request: {groq_url}")
-        logger.info(f"Prompt: {prompt[:200]}...")
-        async with aiohttp.ClientSession() as session:
-            response = await session.post(groq_url, headers=headers, json={
-                "model": "llama3-70b-8192",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 800
-            }, timeout=20)
-            logger.info(f"Groq response status: {response.status}")
-            response_text = await response.text()
-            logger.info(f"Groq response text: {response_text[:500]}")
-            if response.status == 200:
-                try:
-                    data = await response.json()
-                    response_text = data["choices"][0]["message"]["content"]
-                    json_match = re.search(r'\{[\s\S]*\}', response_text)
-                    if json_match:
-                        json_str = json_match.group(0)
-                        try:
-                            parsed_response = json.loads(json_str)
-                            suggestions = []
-                            for i, suggestion in enumerate(parsed_response.get("suggestions", [])):
-                                original_text = suggestion.get("original_text", "")
-                                suggested_text = suggestion.get("suggested_text", "")
-                                if not suggested_text.strip() and suggestion.get("type") not in ["spelling", "grammar"]:
-                                    continue
-                                position = {"start": 0, "end": len(original_text)}
-                                if original_text and original_text in content:
-                                    start_pos = content.find(original_text)
-                                    if start_pos != -1:
-                                        position = {"start": start_pos, "end": start_pos + len(original_text)}
-                                suggestions.append(AISuggestion(
-                                    id=f"groq_suggestion_{i}",
-                                    type=suggestion.get("type", "general"),
-                                    category=suggestion.get("category", "improvement"),
-                                    original_text=original_text,
-                                    suggested_text=suggested_text,
-                                    explanation=suggestion.get("explanation", ""),
-                                    confidence=suggestion.get("confidence", 0.8),
-                                    position=position,
-                                    severity=suggestion.get("severity", "medium")
-                                ))
-                            return suggestions
-                        except Exception as e:
-                            logger.warning(f"Failed to parse Groq JSON: {e}\nRaw JSON: {json_str}")
-                            return []
-                except Exception as e:
-                    logger.warning(f"Failed to parse Groq API response JSON: {e}\nRaw response: {response_text}")
-                    return []
-            else:
-                logger.warning(f"Groq API returned non-200 status: {response.status}\nResponse: {response_text}")
-                return []
-    except Exception as e:
-        logger.warning(f"Groq API failed: {e}")
-    return []
-
-async def try_huggingface_api(content: str, goal: str, tone: str, audience: str) -> List[AISuggestion]:
-    print("DEBUG: try_huggingface_api called with:", content)
-    """Use Hugging Face grammar correction model to get a single suggestion."""
-    url = "https://api-inference.huggingface.co/models/prithivida/grammar_error_correcter_v1"
-    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
-    payload = {"inputs": content}
-    try:
-        logger.info(f"Calling Hugging Face API with content: {content}")
-        logger.info(f"Headers: {headers}")
-        logger.info(f"Payload: {payload}")
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, headers=headers, json=payload) as resp:
-                result = await resp.json()
-                logger.info(f"Hugging Face response: {result}")
-                # The model returns a list of dicts with 'generated_text'
-                if isinstance(result, list) and result and 'generated_text' in result[0]:
-                    corrected = result[0]['generated_text']
-                else:
-                    corrected = content
-                if corrected.strip() == content.strip():
-                    return []  # No correction needed
-                return [
-                    AISuggestion(
-                        id="hf-1",
-                        type="grammar",
-                        category="correction",
-                        original_text=content,
-                        suggested_text=corrected,
-                        explanation="Corrected using Hugging Face grammar model.",
-                        confidence=0.95,
-                        position={"start": 0, "end": len(content)},
-                        severity="medium",
-                        rule="grammar"
-                    )
-                ]
-    except Exception as e:
-        logger.error(f"Hugging Face API error: {e}")
-        return []
-
-def get_fallback_suggestions(content: str) -> List[AISuggestion]:
-    """Get fallback suggestions when AI APIs are not available"""
-    suggestions = []
-    
-    # Expanded spelling and grammar checks
-    common_mistakes = {
-        # Existing and expanded common misspellings
-        "recieve": "receive", "definately": "definitely", "seperate": "separate", "occured": "occurred", "neccessary": "necessary", "accomodate": "accommodate", "begining": "beginning", "beleive": "believe", "calender": "calendar", "collegue": "colleague", "wich": "which", "adress": "address", "enviroment": "environment", "goverment": "government", "occassion": "occasion", "publically": "publicly", "untill": "until", "writting": "writing", "thier": "their", "teh": "the", "alot": "a lot", "seperately": "separately", "succesful": "successful", "tommorow": "tomorrow", "wierd": "weird", "schol": "school",
-        "acheive": "achieve", "arguement": "argument", "buisness": "business", "comming": "coming", "happend": "happened", "occurence": "occurrence", "becuase": "because", "agian": "again", "embarass": "embarrass", "foriegn": "foreign", "gratefull": "grateful", "humerous": "humorous", "noticable": "noticeable", "posession": "possession", "prefered": "preferred", "presance": "presence", "realy": "really", "remeber": "remember", "suprise": "surprise", "tendancy": "tendency", "treshold": "threshold", "truely": "truly", "ture": "true", "accomodate": "accommodate", "occuring": "occurring", "perseverence": "perseverance", "reciept": "receipt", "restaraunt": "restaurant", "seige": "siege", "supercede": "supersede", "untill": "until", "wierd": "weird", "writen": "written", "yatch": "yacht",
-        # New additions
-        "seperated": "separated", "occassionally": "occasionally", "mispell": "misspell", "adress": "address", "concious": "conscious", "conciousness": "consciousness", "embarassment": "embarrassment", "existance": "existence", "goverment": "government", "harrass": "harass", "independant": "independent", "neccessary": "necessary", "occured": "occurred", "occuring": "occurring", "posession": "possession", "publically": "publicly", "reccommend": "recommend", "recieve": "receive", "refered": "referred", "seperately": "separately", "succesful": "successful", "tommorrow": "tomorrow", "untill": "until", "wierd": "weird", "writting": "writing", "definate": "definite", "goverment": "government", "happend": "happened", "knowlege": "knowledge", "occassion": "occasion", "occurence": "occurrence", "prefered": "preferred", "reciept": "receipt", "sieze": "seize", "tommorow": "tomorrow", "untill": "until", "wierd": "weird", "writen": "written", "yatch": "yacht"
-    }
-    # Scan for all common mistakes
-    for mistake, correction in common_mistakes.items():
-        pattern = re.compile(rf'\b{mistake}\b', re.IGNORECASE)
-        for match in pattern.finditer(content):
-            start_pos = match.start()
-            suggestions.append(AISuggestion(
-                id=f"fallback_spelling_{len(suggestions)}",
-                type="spelling",
-                category="spelling",
-                original_text=content[start_pos:start_pos + len(mistake)],
-                suggested_text=correction,
-                explanation=f"'{mistake}' is misspelled. The correct spelling is '{correction}'.",
-                confidence=0.95,
-                position={"start": start_pos, "end": start_pos + len(mistake)},
-                severity="high"
-            ))
-    # Add more common confusions
-    confusion_patterns = [
-        (r"\byour\b", "you're", "Did you mean 'you're' (you are)?", "grammar"),
-        (r"\byou're\b", "your", "Did you mean 'your' (possessive)?", "grammar"),
-        (r"\bits\b", "it's", "Did you mean 'it's' (it is)?", "grammar"),
-        (r"\bit's\b", "its", "Did you mean 'its' (possessive)?", "grammar"),
-        (r"\btheir\b", "they're", "Did you mean 'they're' (they are)?", "grammar"),
-        (r"\bthey're\b", "their", "Did you mean 'their' (possessive)?", "grammar"),
-        (r"\bthere\b", "their", "Did you mean 'their' (possessive)?", "grammar"),
-    ]
-    for pattern, correction, explanation, type_ in confusion_patterns:
-        for match in re.finditer(pattern, content, re.IGNORECASE):
-            start_pos = match.start()
-            suggestions.append(AISuggestion(
-                id=f"fallback_confusion_{len(suggestions)}",
-                type=type_,
-                category=type_,
-                original_text=match.group(0),
-                suggested_text=correction,
-                explanation=explanation,
-                confidence=0.85,
-                position={"start": start_pos, "end": start_pos + len(match.group(0))},
-                severity="medium"
-            ))
-    # Basic grammar/tense checks (expandable)
-    patterns = [
-        (r'\bI am going to the store yesterday\b', "I went to the store yesterday", "Incorrect verb tense. Use past tense for actions that happened in the past.", "tense"),
-        (r'\bShe have been working\b', "She has been working", "Incorrect subject-verb agreement. Use 'has' with singular third-person subjects.", "grammar"),
-        (r"\bHe don't\b", "He doesn't", "Incorrect verb form. Use 'doesn't' for third-person singular.", "grammar"),
-        (r'\bI has\b', "I have", "Incorrect verb form. Use 'have' with 'I'.", "grammar"),
-        (r'\bmore better\b', "better", "Redundant comparative. Use 'better' instead of 'more better'.", "clarity"),
-        (r'\bmost best\b', "best", "Redundant superlative. Use 'best' instead of 'most best'.", "clarity"),
-        (r'\bI didn\'t went\b', "I didn't go", "Incorrect past tense after 'didn't'. Use base form.", "tense"),
-        (r'\bbetween you and I\b', "between you and me", "Incorrect pronoun case after 'between'.", "grammar"),
-        (r'\bhe go\b', "he goes", "Incorrect verb form. Use 'goes' with 'he' (third-person singular).", "grammar"),
-        (r'\bshe go\b', "she goes", "Incorrect verb form. Use 'goes' with 'she' (third-person singular).", "grammar"),
-        (r'\bit go\b', "it goes", "Incorrect verb form. Use 'goes' with 'it' (third-person singular).", "grammar"),
-        (r'\bhe have\b', "he has", "Incorrect verb form. Use 'has' with 'he'.", "grammar"),
-        (r'\bshe have\b', "she has", "Incorrect verb form. Use 'has' with 'she'.", "grammar"),
-        (r'\bit have\b', "it has", "Incorrect verb form. Use 'has' with 'it'.", "grammar"),
-        (r'\bI goes\b', "I go", "Incorrect verb form. Use 'go' with 'I'.", "grammar"),
-        (r'\bthey goes\b', "they go", "Incorrect verb form. Use 'go' with 'they'.", "grammar"),
-        (r'\bwe goes\b', "we go", "Incorrect verb form. Use 'go' with 'we'.", "grammar"),
-        (r'\byou goes\b', "you go", "Incorrect verb form. Use 'go' with 'you'.", "grammar"),
-        (r"\bshe don't\b", "she doesn't", "Incorrect verb form. Use 'doesn't' for third-person singular.", "grammar"),
-        (r"\bit don't\b", "it doesn't", "Incorrect verb form. Use 'doesn't' for third-person singular.", "grammar"),
-        (r'\bI seen\b', "I saw", "Incorrect verb form. Use 'saw' as the past tense of 'see'.", "grammar"),
-        (r'\bI done\b', "I did", "Incorrect verb form. Use 'did' as the past tense of 'do'.", "grammar"),
-        (r'\bI have ate\b', "I have eaten", "Incorrect verb form. Use 'eaten' with 'have'.", "grammar"),
-        (r'\bI gone\b', "I went", "Incorrect verb form. Use 'went' as the past tense of 'go'.", "grammar"),
-        (r'\bI brang\b', "I brought", "Incorrect verb form. Use 'brought' as the past tense of 'bring'.", "grammar"),
-        (r'\bI runned\b', "I ran", "Incorrect verb form. Use 'ran' as the past tense of 'run'.", "grammar"),
-        (r'\bI writed\b', "I wrote", "Incorrect verb form. Use 'wrote' as the past tense of 'write'.", "grammar"),
-        (r'\bI buyed\b', "I bought", "Incorrect verb form. Use 'bought' as the past tense of 'buy'.", "grammar"),
-        (r'\bI thinked\b', "I thought", "Incorrect verb form. Use 'thought' as the past tense of 'think'.", "grammar"),
-        (r'\bI feeled\b', "I felt", "Incorrect verb form. Use 'felt' as the past tense of 'feel'.", "grammar"),
-        (r'\bI sleeped\b', "I slept", "Incorrect verb form. Use 'slept' as the past tense of 'sleep'.", "grammar"),
-        (r'\bI drinked\b', "I drank", "Incorrect verb form. Use 'drank' as the past tense of 'drink'.", "grammar"),
-        (r'\bI catched\b', "I caught", "Incorrect verb form. Use 'caught' as the past tense of 'catch'.", "grammar"),
-        (r'\bI teached\b', "I taught", "Incorrect verb form. Use 'taught' as the past tense of 'teach'.", "grammar"),
-        (r'\bI bringed\b', "I brought", "Incorrect verb form. Use 'brought' as the past tense of 'bring'.", "grammar"),
-        (r'\bI costed\b', "I cost", "Incorrect verb form. Use 'cost' as the past tense of 'cost'.", "grammar"),
-        (r'\bI hurted\b', "I hurt", "Incorrect verb form. Use 'hurt' as the past tense of 'hurt'.", "grammar"),
-        (r'\bI putted\b', "I put", "Incorrect verb form. Use 'put' as the past tense of 'put'.", "grammar"),
-        (r'\bI readed\b', "I read", "Incorrect verb form. Use 'read' as the past tense of 'read'.", "grammar"),
-        (r'\bI sended\b', "I sent", "Incorrect verb form. Use 'sent' as the past tense of 'send'.", "grammar"),
-        (r'\bI shaked\b', "I shook", "Incorrect verb form. Use 'shook' as the past tense of 'shake'.", "grammar"),
-        (r'\bI shooted\b', "I shot", "Incorrect verb form. Use 'shot' as the past tense of 'shoot'.", "grammar"),
-        (r'\bI spended\b', "I spent", "Incorrect verb form. Use 'spent' as the past tense of 'spend'.", "grammar"),
-        (r'\bI standed\b', "I stood", "Incorrect verb form. Use 'stood' as the past tense of 'stand'.", "grammar"),
-        (r'\bI swimmed\b', "I swam", "Incorrect verb form. Use 'swam' as the past tense of 'swim'.", "grammar"),
-        (r'\bI understanded\b', "I understood", "Incorrect verb form. Use 'understood' as the past tense of 'understand'.", "grammar"),
-        (r'\bI weared\b', "I wore", "Incorrect verb form. Use 'wore' as the past tense of 'wear'.", "grammar"),
-        (r'\bI winced\b', "I won", "Incorrect verb form. Use 'won' as the past tense of 'win'.", "grammar"),
-        (r"It don’t works", "It doesn’t work", "Incorrect verb form. Use 'doesn’t work'.", "grammar"),
-        (r"She haven’t a car", "She doesn’t have a car", "Incorrect negative. Use 'doesn’t have'.", "grammar"),
-        (r"He is richest than me", "He is richer than me", "Incorrect comparative. Use 'richer'.", "grammar"),
-        (r"The room was more bigger than before", "The room was bigger than before", "Redundant comparative. Use 'bigger'.", "clarity"),
-        (r"It’s depend on the weather", "It depends on the weather", "Incorrect verb form. Use 'depends'.", "grammar"),
-        (r"He is afraid from spiders", "He is afraid of spiders", "Incorrect preposition. Use 'afraid of'.", "grammar"),
-        (r"She sings good", "She sings well", "Incorrect adverb. Use 'well'.", "grammar"),
-        (r"I saw him before two hours", "I saw him two hours ago", "Incorrect time expression. Use 'two hours ago'.", "grammar"),
-        (r"The house is more old", "The house is older", "Incorrect comparative. Use 'older'.", "grammar"),
-        (r"You must not to be late", "You must not be late", "Do not use 'to' after 'must not'.", "grammar"),
-        (r"He never comes late, isn’t it", "He never comes late, does he?", "Incorrect question tag. Use 'does he?'.", "grammar"),
-        (r"She cried because she was fear", "She cried because she was afraid", "Incorrect adjective. Use 'afraid'.", "grammar"),
-        (r"I didn’t saw him at the party", "I didn’t see him at the party", "Incorrect verb form after 'didn’t'. Use base form 'see'.", "grammar"),
-        (r"He has much money", "He has a lot of money", "Use 'a lot of' for quantity with countable/uncountable nouns.", "grammar"),
-        (r"The dog was barked loudly", "The dog barked loudly", "Incorrect passive. Use active voice 'barked loudly'.", "grammar"),
-        (r"It was very hotly in the room", "It was very hot in the room", "Incorrect adverb. Use 'hot'.", "grammar"),
-        (r"My friend she is very kind", "My friend is very kind", "Redundant subject. Remove 'she'.", "grammar"),
-        (r"The informations you gave are wrong", "The information you gave is wrong", "'Information' is uncountable. Use singular form.", "grammar"),
-        (r"He don’t wants help", "He doesn’t want help", "Incorrect verb form. Use 'doesn’t want'.", "grammar"),
-        (r"I was there yesterday, didn’t I", "I was there yesterday, wasn’t I?", "Incorrect question tag. Use 'wasn’t I?'.", "grammar"),
-        (r"I lost my keys, isn’t it", "I lost my keys, didn’t I?", "Incorrect question tag. Use 'didn’t I?'.", "grammar"),
-        (r"The cake was baking by my mom", "The cake was baked by my mom", "Incorrect passive. Use 'baked'.", "grammar"),
-        (r"He don’t likes coffee", "He doesn’t like coffee", "Incorrect verb form. Use 'doesn’t like'.", "grammar"),
-        (r"The girl which sings is my sister", "The girl who sings is my sister", "Use 'who' for people.", "grammar"),
-        (r"He go school by foot", "He goes to school on foot", "Incorrect verb form and preposition. Use 'goes to school on foot'.", "grammar"),
-        (r"She told that she will goes", "She said that she will go", "Incorrect verb form. Use 'will go'.", "grammar"),
-        (r"I will going to the shop", "I will go to the shop", "Incorrect verb form. Use 'will go'.", "grammar"),
-        (r"They has arrived now", "They have arrived now", "Incorrect verb form. Use 'have' with 'they'.", "grammar"),
-        (r"She don’t has any idea", "She doesn’t have any idea", "Incorrect verb form. Use 'doesn’t have'.", "grammar"),
-        (r"You should goes now", "You should go now", "Incorrect verb form. Use 'go' after 'should'.", "grammar"),
-        (r"He needs to goes home", "He needs to go home", "Incorrect verb form. Use 'go' after 'needs to'.", "grammar"),
-        (r"She study hard for exam", "She studies hard for the exam", "Incorrect verb form and missing article. Use 'studies hard for the exam'.", "grammar"),
-        (r"The both boys are friends", "Both boys are friends", "Remove 'the' before 'both'.", "grammar"),
-        (r"She married with a doctor", "She married a doctor", "Incorrect preposition. Use 'married a doctor'.", "grammar"),
-        (r"He prefer tea than coffee", "He prefers tea to coffee", "Incorrect verb form and preposition. Use 'prefers tea to coffee'.", "grammar"),
-        (r"We was played cricket yesterday", "We played cricket yesterday", "Incorrect verb form. Use 'played'.", "grammar"),
-        (r"The work is more easy now", "The work is easier now", "Incorrect comparative. Use 'easier'.", "grammar"),
-        (r"I am having a doubt", "I have a question", "Use 'have a question' instead of 'having a doubt'.", "grammar"),
-        (r"He is very more intelligent", "He is much more intelligent", "Use 'much more intelligent'.", "grammar"),
-        (r"You was sleeping during class", "You were sleeping during class", "Incorrect verb form. Use 'were' with 'you'.", "grammar"),
-        (r"I cannot able to do it", "I cannot do it", "Redundant modal. Use 'cannot do it'.", "grammar"),
-        (r"\bI am studying in the university\b", "I am studying at the university", "Incorrect preposition. Use 'at' with 'university'.", "grammar"),
-    (r"\bShe borned in 2001\b", "She was born in 2001", "Incorrect verb form. Use 'was born'.", "grammar"),
-    (r"\bHe haven’t arrived yet\b", "He hasn’t arrived yet", "Incorrect verb form. Use 'hasn’t' with 'he'.", "grammar"),
-    (r"\bThey speaks very well\b", "They speak very well", "Incorrect verb form. Use 'speak' with 'they'.", "grammar"),
-    (r"\bIs raining outside\b", "It is raining outside", "Missing subject. Use 'It is raining'.", "grammar"),
-    (r"\bI likes ice cream\b", "I like ice cream", "Incorrect verb form. Use 'like' with 'I'.", "grammar"),
-    (r"\bHe always arrive late\b", "He always arrives late", "Incorrect verb form. Use 'arrives' with 'he'.", "grammar"),
-    (r"\bI am having headache\b", "I have a headache", "Use 'have a headache'.", "grammar"),
-    (r"\bShe don’t study hard\b", "She doesn’t study hard", "Incorrect verb form. Use 'doesn’t study'.", "grammar"),
-    (r"\bWe no went to the park\b", "We didn’t go to the park", "Incorrect negative past. Use 'didn’t go'.", "grammar"),
-    (r"\bShe is married to a engineer\b", "She is married to an engineer", "Incorrect article. Use 'an' before vowel sound.", "grammar"),
-    (r"\bIt’s too much hot today\b", "It’s too hot today", "Incorrect quantifier. Use 'too hot'.", "grammar"),
-    (r"\bHe is more taller than me\b", "He is taller than me", "Redundant comparative. Use 'taller'.", "clarity"),
-    (r"\bThe child have many toys\b", "The child has many toys", "Incorrect verb form. Use 'has' with 'child'.", "grammar"),
-    (r"\bWhere are you going at\b", "Where are you going?", "Do not use 'at' after 'going'.", "grammar"),
-    (r"\bI am going to home\b", "I am going home", "Do not use 'to' before 'home'.", "grammar"),
-    (r"\bThis dress is more prettier\b", "This dress is prettier", "Redundant comparative. Use 'prettier'.", "clarity"),
-    (r"\bWe was listening to music\b", "We were listening to music", "Incorrect verb form. Use 'were' with 'we'.", "grammar"),
-    (r"\bI thinked about it\b", "I thought about it", "Incorrect past tense. Use 'thought'.", "grammar"),
-    (r"\bThey not want to participate\b", "They do not want to participate", "Incorrect negative. Use 'do not want'.", "grammar"),
-    (r"\bHe drinks coffee on every morning\b", "He drinks coffee every morning", "Do not use 'on' before 'every morning'.", "grammar"),
-    (r"\bYou has to try this\b", "You have to try this", "Incorrect verb form. Use 'have' with 'you'.", "grammar"),
-    (r"\bThat’s belong to me\b", "That belongs to me", "Incorrect verb form. Use 'belongs'.", "grammar"),
-    (r"\bHe is very much talented\b", "He is very talented", "Redundant quantifier. Use 'very talented'.", "grammar"),
-    (r"\bI can to do it\b", "I can do it", "Do not use 'to' after 'can'.", "grammar"),
-    (r"\bThey was happy for see us\b", "They were happy to see us", "Incorrect verb form and preposition. Use 'were happy to see'.", "grammar"),
-    (r"\bShe did a accident\b", "She had an accident", "Incorrect verb and article. Use 'had an accident'.", "grammar"),
-    (r"\bHe not understand the question\b", "He does not understand the question", "Incorrect negative. Use 'does not understand'.", "grammar"),
-    (r"\bThis is the more important topic\b", "This is the most important topic", "Incorrect superlative. Use 'most important'.", "grammar"),
-    (r"\bI am not agree with him\b", "I do not agree with him", "Incorrect negative. Use 'do not agree'.", "grammar"),
-    (r"\bHe have many books\b", "He has many books", "Incorrect verb form. Use 'has' with 'he'.", "grammar"),
-        (r"Their going to the market now", "They're going to the market now", "Incorrect word. Use 'they're' for 'they are'.", "grammar"),
-    (r"I has completed the work", "I have completed the work", "Incorrect verb form. Use 'have' with 'I'.", "grammar"),
-    (r"The dog bark loud in the night", "The dog barks loudly at night", "Incorrect verb form and adverb. Use 'barks loudly at night'.", "grammar"),
-    (r"Its a beautiful day, isn’t it\?", "It's a beautiful day, isn't it?", "Missing apostrophe and question mark. Use 'It's' and proper punctuation.", "punctuation"),
-    (r"Your the best player here", "You're the best player here", "Incorrect word. Use 'you're' for 'you are'.", "grammar"),
-    (r"I am interesting in learning AI", "I am interested in learning AI", "Incorrect adjective. Use 'interested'.", "grammar"),
-    (r"They was happy with the results", "They were happy with the results", "Incorrect verb form. Use 'were' with 'they'.", "grammar"),
-    # Punctuation & Capitalization
-    (r"^i went to london last week", "I went to London last week", "Capitalize 'I' and 'London'.", "capitalization"),
-    (r"Let’s eat grandma!", "Let’s eat, grandma!", "Missing comma changes meaning. Add comma after 'eat'.", "punctuation"),
-    (r"Do you know where my phone is$", "Do you know where my phone is?", "Missing question mark at the end.", "punctuation"),
-    (r"^she said she will come later\.", "She said she will come later.", "Capitalize first word of the sentence.", "capitalization"),
-    (r"He said “I’m tired”.", "He said, \"I'm tired.\"", "Use proper quotation marks and comma before quote.", "punctuation"),
-    # Run-on Sentences & Fragments (simple cases)
-    (r"He studied hard he passed the exam\.", "He studied hard, and he passed the exam.", "Run-on sentence. Use a comma and conjunction.", "grammar"),
-    (r"The weather was nice we went for a picnic\.", "The weather was nice, so we went for a picnic.", "Run-on sentence. Use a comma and conjunction.", "grammar"),
-    (r"I like pizza I don’t like burgers\.", "I like pizza, but I don’t like burgers.", "Run-on sentence. Use a comma and conjunction.", "grammar"),
-    # Fragments
-    (r"^Although she was tired\.", "Although she was tired, she finished her work.", "Fragment. Complete the sentence.", "grammar"),
-    (r"^Because I forgot my umbrella\.", "Because I forgot my umbrella, I got wet.", "Fragment. Complete the sentence.", "grammar"),
-    # Misused Words
-    (r"Their going to the park after dinner\.", "They're going to the park after dinner.", "Incorrect word. Use 'they're' for 'they are'.", "grammar"),
-    (r"Your welcome to join us\.", "You're welcome to join us.", "Incorrect word. Use 'you're' for 'you are'.", "grammar"),
-    (r"I have less friends than him\.", "I have fewer friends than he does.", "Use 'fewer' with countable nouns and 'than he does'.", "grammar"),
-    (r"There is many problems with the code\.", "There are many problems with the code.", "Incorrect verb form. Use 'are' with plural 'problems'.", "grammar"),
-    (r"I except your invitation\.", "I accept your invitation.", "Incorrect word. Use 'accept' for agreement.", "grammar"),
-    (r'\bI writed\b', "I wrote", "Incorrect verb form. Use 'wrote' as the past tense of 'write'.", "grammar")
-    ]
-    for pattern, correction, explanation, type_ in patterns:
-        for match in re.finditer(pattern, content, re.IGNORECASE):
-            start_pos = match.start()
-            suggestions.append(AISuggestion(
-                id=f"fallback_{type_}_{len(suggestions)}",
-                type=type_,
-                category=type_,
-                original_text=match.group(0),
-                suggested_text=correction,
-                explanation=explanation,
-                confidence=0.9,
-                position={"start": start_pos, "end": start_pos + len(match.group(0))},
-                severity="medium"
-            ))
-    # Punctuation: double spaces
-    for match in re.finditer(r'  +', content):
-        start_pos = match.start()
-        suggestions.append(AISuggestion(
-            id=f"fallback_punct_{len(suggestions)}",
-            type="punctuation",
-            category="punctuation",
-            original_text=match.group(0),
-            suggested_text=" ",
-            explanation="Multiple spaces found. Use a single space.",
-            confidence=0.8,
-            position={"start": start_pos, "end": start_pos + len(match.group(0))},
-            severity="low"
-        ))
-
-    return suggestions
-
-async def analyze_text_with_ai(content: str) -> AIAnalytics:
-    """Analyze text using AI for various metrics"""
-    try:
-        # Calculate basic metrics
-        words = content.split()
-        sentences = re.split(r'[.!?]+', content)
-        sentences = [s.strip() for s in sentences if s.strip()]
-        
-        # Readability score (simplified Flesch Reading Ease)
-        if sentences and words:
-            avg_sentence_length = len(words) / len(sentences)
-            readability_score = max(0, min(100, 100 - (avg_sentence_length * 1.5)))
-        else:
-            readability_score = 50
-        
-        # Sentiment analysis (simplified)
-        positive_words = ["good", "great", "excellent", "amazing", "wonderful", "fantastic"]
-        negative_words = ["bad", "terrible", "awful", "horrible", "disappointing"]
-        
-        positive_count = sum(1 for word in words if word.lower() in positive_words)
-        negative_count = sum(1 for word in words if word.lower() in negative_words)
-        
-        if words:
-            sentiment_score = (positive_count - negative_count) / len(words) * 100
-        else:
-            sentiment_score = 0
-        
-        # Tone analysis
-        formal_words = ["therefore", "furthermore", "consequently", "utilize", "facilitate"]
-        informal_words = ["gonna", "wanna", "gotta", "cool", "awesome"]
-        
-        formal_count = sum(1 for word in words if word.lower() in formal_words)
-        informal_count = sum(1 for word in words if word.lower() in informal_words)
-        
-        tone_analysis = {
-            "formal": formal_count / max(len(words), 1) * 100,
-            "informal": informal_count / max(len(words), 1) * 100,
-            "neutral": 100 - (formal_count + informal_count) / max(len(words), 1) * 100
-        }
-        
-        # Complexity score
-        unique_words = len(set(words))
-        complexity_score = (unique_words / max(len(words), 1)) * 100
-        
-        # Engagement score
-        question_count = content.count('?')
-        exclamation_count = content.count('!')
-        engagement_score = min(100, (question_count + exclamation_count) * 10)
-        
-        # Word diversity
-        word_diversity = (unique_words / max(len(words), 1)) * 100
-        
-        # Sentence variety
-        sentence_lengths = [len(s.split()) for s in sentences]
-        if sentence_lengths:
-            sentence_variety = (max(sentence_lengths) - min(sentence_lengths)) / max(max(sentence_lengths), 1) * 100
-        else:
-            sentence_variety = 0
-        
-        return AIAnalytics(
-            readability_score=readability_score,
-            sentiment_score=sentiment_score,
-            tone_analysis=tone_analysis,
-            complexity_score=complexity_score,
-            engagement_score=engagement_score,
-            word_diversity=word_diversity,
-            sentence_variety=sentence_variety
-        )
-        
-    except Exception as e:
-        logger.error(f"Error analyzing text: {e}")
-        return AIAnalytics(
-            readability_score=50,
-            sentiment_score=0,
-            tone_analysis={"formal": 0, "informal": 0, "neutral": 100},
-            complexity_score=50,
-            engagement_score=0,
-            word_diversity=50,
-            sentence_variety=0
-        )
-
-def calculate_text_stats(content: str) -> Dict[str, Any]:
-    """Calculate basic text statistics"""
-    words = content.split()
-    sentences = re.split(r'[.!?]+', content)
-    sentences = [s.strip() for s in sentences if s.strip()]
-    
-    return {
-        "word_count": len(words),
-        "character_count": len(content),
-        "sentence_count": len(sentences),
-        "paragraph_count": len([p for p in content.split('\n\n') if p.strip()]),
-        "average_words_per_sentence": len(words) / max(len(sentences), 1),
-        "reading_time_minutes": len(words) / 200,  # Average reading speed
-        "unique_words": len(set(words)),
-        "vocabulary_diversity": len(set(words)) / max(len(words), 1)
-    }
-
-def calculate_document_score(analytics: AIAnalytics) -> int:
-    """Calculate overall document score based on analytics"""
-    try:
-        # Weighted scoring based on different metrics
-        readability_weight = 0.25
-        engagement_weight = 0.20
-        diversity_weight = 0.20
-        variety_weight = 0.15
-        sentiment_weight = 0.20
-        
-        score = (
-            analytics.readability_score * readability_weight +
-            analytics.engagement_score * engagement_weight +
-            analytics.word_diversity * diversity_weight +
-            analytics.sentence_variety * variety_weight +
-            (analytics.sentiment_score + 50) * sentiment_weight  # Normalize sentiment to 0-100
-        )
-        
-        return max(0, min(100, int(score)))
-    except Exception as e:
-        logger.error(f"Error calculating document score: {e}")
-        return 50
 
 async def store_analytics(user_id: str, document_id: str, analytics: AIAnalytics):
     """Store analytics data for a document"""
     try:
-        analytics_db[f"{user_id}_{document_id}"] = {
-            "user_id": user_id,
-            "document_id": document_id,
-            "analytics": analytics.dict(),
-            "timestamp": datetime.now().isoformat()
-        }
+        await db_manager.save_analytics(user_id, document_id, analytics)
     except Exception as e:
         logger.error(f"Error storing analytics: {e}")
 
@@ -977,17 +512,13 @@ async def check_plagiarism_ai(request: PlagiarismRequest):
 
 async def check_web_sources(content: str) -> List[PlagiarismMatch]:
     """Check web sources for plagiarism (simplified)"""
-    # This is a simplified implementation
-    # In production, you would integrate with actual plagiarism detection services
     matches = []
-    
     # Simulate checking against common phrases
     common_phrases = [
         "The quick brown fox jumps over the lazy dog",
         "To be or not to be, that is the question",
         "All the world's a stage"
     ]
-    
     for i, phrase in enumerate(common_phrases):
         if phrase.lower() in content.lower():
             similarity = len(phrase) / len(content) * 100
@@ -1002,22 +533,28 @@ async def check_web_sources(content: str) -> List[PlagiarismMatch]:
                     type="web",
                     confidence=0.8
                 ))
-    
+    # Fallback: always return a mock match for any non-empty input
+    if not matches and content.strip():
+        matches.append(PlagiarismMatch(
+            id="web_fallback_0",
+            source="Web Source (Mock)",
+            similarity=round(min(100, max(10, len(content) % 50 + 10)), 1),
+            matched_text=content.strip()[:100] + ("..." if len(content.strip()) > 100 else ""),
+            source_text=content.strip()[:100] + ("..." if len(content.strip()) > 100 else ""),
+            url="https://example.com/mock",
+            type="web",
+            confidence=0.5
+        ))
     return matches
 
 async def check_academic_sources(content: str) -> List[PlagiarismMatch]:
     """Check academic sources for plagiarism (simplified)"""
-    # This is a simplified implementation
-    # In production, you would integrate with academic databases
     matches = []
-    
-    # Simulate checking against academic papers
     academic_phrases = [
         "The results indicate a significant correlation",
         "Previous research has shown",
         "This study demonstrates"
     ]
-    
     for i, phrase in enumerate(academic_phrases):
         if phrase.lower() in content.lower():
             similarity = len(phrase) / len(content) * 100
@@ -1032,7 +569,18 @@ async def check_academic_sources(content: str) -> List[PlagiarismMatch]:
                     type="academic",
                     confidence=0.9
                 ))
-    
+    # Fallback: always return a mock match for any non-empty input
+    if not matches and content.strip():
+        matches.append(PlagiarismMatch(
+            id="academic_fallback_0",
+            source="Academic Source (Mock)",
+            similarity=round(min(100, max(10, len(content) % 40 + 10)), 1),
+            matched_text=content.strip()[:100] + ("..." if len(content.strip()) > 100 else ""),
+            source_text=content.strip()[:100] + ("..." if len(content.strip()) > 100 else ""),
+            url="https://scholar.google.com/mock",
+            type="academic",
+            confidence=0.5
+        ))
     return matches
 
 def calculate_similarity_score(text: str) -> float:
@@ -1048,7 +596,7 @@ async def get_writing_insights(request: InsightRequest):
     """Get AI-powered writing insights"""
     try:
         # Get user's documents
-        user_docs = [doc for doc in documents_db.values() if doc.get("user_id") == request.user_id]
+        user_docs = await db_manager.get_user_documents(request.user_id, limit=100)
         
         if not user_docs:
             return InsightResponse(
@@ -1063,6 +611,38 @@ async def get_writing_insights(request: InsightRequest):
         
         # Calculate performance metrics
         performance_metrics = calculate_performance_metrics(user_docs)
+
+        # Get writing activity and score trend for the last 7 days
+        trends = await db_manager.get_writing_trends(request.user_id, days=7)
+        # trends: [{_id: {year, month, day}, words, documents}]
+        # Map date string to {words, score}
+        from collections import defaultdict
+        import datetime
+        activity_chart = []
+        score_map = defaultdict(list)
+        for doc in user_docs:
+            if doc.get("created_at") and doc.get("score") is not None:
+                dt = doc["created_at"]
+                if isinstance(dt, str):
+                    try:
+                        dt = datetime.datetime.fromisoformat(dt)
+                    except Exception:
+                        continue
+                date_str = dt.strftime("%Y-%m-%d")
+                score_map[date_str].append(doc.get("score", 0))
+        for t in trends:
+            d = t["_id"]
+            date_str = f"{d['year']}-{d['month']:02d}-{d['day']:02d}"
+            avg_score = 0
+            if score_map[date_str]:
+                avg_score = sum(score_map[date_str]) / len(score_map[date_str])
+            activity_chart.append({
+                "date": date_str,
+                "words": t["words"],
+                "score": round(avg_score, 1)
+            })
+        # Sort by date
+        activity_chart.sort(key=lambda x: x["date"])
         
         # Identify improvement areas
         improvement_areas = identify_improvement_areas(user_docs)
@@ -1074,9 +654,9 @@ async def get_writing_insights(request: InsightRequest):
             insights=insights,
             performance_metrics=performance_metrics,
             improvement_areas=improvement_areas,
-            achievements=achievements
+            achievements=achievements,
+            activity_chart=activity_chart
         )
-        
     except Exception as e:
         logger.error(f"Error getting writing insights: {e}")
         raise HTTPException(status_code=500, detail="Failed to get writing insights")
@@ -1126,15 +706,29 @@ async def generate_ai_insights(documents: List[Dict], time_range: str) -> List[W
     return insights
 
 def calculate_performance_metrics(documents: List[Dict]) -> Dict[str, Any]:
-    """Calculate performance metrics from documents"""
     if not documents:
-        return {}
-    
+        return {
+            "total_documents": 0,
+            "total_words": 0,
+            "average_score": 0,
+            "writing_frequency": 0,
+            "best_score": 0,
+            "average_words_per_document": 0,
+            "time_spent_per_day": 0
+        }
     total_words = sum(doc.get("word_count", 0) for doc in documents)
-    avg_score = sum(doc.get("score", 0) for doc in documents) / len(documents)
+    avg_score = sum(doc.get("score", 0) for doc in documents) / len(documents) if documents else 0
+    best_score = max(doc.get("score", 0) for doc in documents) if documents else 0
+    avg_words_per_doc = total_words / len(documents) if documents else 0
     
     # Calculate writing frequency
-    dates = [doc.get("last_modified", "") for doc in documents]
+    dates = []
+    for doc in documents:
+        value = doc.get("last_modified", "")
+        if isinstance(value, datetime):
+            value = value.isoformat()
+        if isinstance(value, str) and value:
+            dates.append(value)
     if dates:
         latest_date = max(dates)
         earliest_date = min(dates)
@@ -1143,13 +737,40 @@ def calculate_performance_metrics(documents: List[Dict]) -> Dict[str, Any]:
     else:
         writing_frequency = 0
     
+    # Calculate time spent per day (in minutes)
+    from collections import defaultdict
+    day_minutes = defaultdict(float)
+    for doc in documents:
+        created = doc.get("created_at")
+        modified = doc.get("last_modified")
+        if not created or not modified:
+            continue
+        if isinstance(created, str):
+            try:
+                created = datetime.fromisoformat(created)
+            except Exception:
+                continue
+        if isinstance(modified, str):
+            try:
+                modified = datetime.fromisoformat(modified)
+            except Exception:
+                continue
+        # Only count if modified is after created
+        if modified > created:
+            day = modified.date()
+            minutes = (modified - created).total_seconds() / 60.0
+            day_minutes[day] += minutes
+    total_days = len(day_minutes)
+    time_spent_per_day = sum(day_minutes.values()) / total_days if total_days > 0 else 0
+
     return {
         "total_documents": len(documents),
         "total_words": total_words,
         "average_score": round(avg_score, 1),
         "writing_frequency": round(writing_frequency, 2),
-        "best_score": max(doc.get("score", 0) for doc in documents),
-        "average_words_per_document": total_words / len(documents)
+        "best_score": best_score,
+        "average_words_per_document": avg_words_per_doc,
+        "time_spent_per_day": int(time_spent_per_day)
     }
 
 def identify_improvement_areas(documents: List[Dict]) -> List[str]:
@@ -1228,35 +849,31 @@ async def get_user_statistics(user_id: str, days: int = 7):
     """Get user writing statistics"""
     try:
         # Get user's documents
-        user_docs = [doc for doc in documents_db.values() if doc.get("user_id") == user_id]
-        
+        user_docs = await db_manager.get_user_documents(user_id)
         if not user_docs:
             return {
                 "total_documents": 0,
                 "total_words": 0,
                 "average_score": 0,
                 "writing_streak": 0,
-                "recent_activity": []
+                "recent_activity": [],
+                "improvement_rate": 0
             }
-        
         # Calculate statistics
         total_documents = len(user_docs)
         total_words = sum(doc.get("word_count", 0) for doc in user_docs)
         average_score = sum(doc.get("score", 0) for doc in user_docs) / len(user_docs)
-        
+        from datetime import datetime, timedelta
         # Calculate writing streak
-        dates = [datetime.fromisoformat(doc.get("last_modified", "")) for doc in user_docs]
+        dates = [datetime.fromisoformat(doc.get("last_modified", "")) for doc in user_docs if doc.get("last_modified", "")]
         dates.sort(reverse=True)
-        
         streak = 0
         current_date = datetime.now().date()
-        
         for date in dates:
             if date.date() == current_date - timedelta(days=streak):
                 streak += 1
             else:
                 break
-        
         # Recent activity
         recent_activity = []
         for doc in sorted(user_docs, key=lambda x: x.get("last_modified", ""), reverse=True)[:5]:
@@ -1266,18 +883,46 @@ async def get_user_statistics(user_id: str, days: int = 7):
                 "score": doc.get("score", 0),
                 "date": doc.get("last_modified", "")
             })
-        
+        # Improvement rate: percent change in words written this week vs last week
+        this_week_start = (datetime.now() - timedelta(days=datetime.now().weekday())).date()
+        last_week_start = this_week_start - timedelta(days=7)
+        this_week_words = 0
+        last_week_words = 0
+        for doc in user_docs:
+            lm = doc.get("last_modified", "")
+            if not lm:
+                continue
+            try:
+                lm_date = datetime.fromisoformat(lm).date()
+            except Exception:
+                continue
+            if this_week_start <= lm_date <= this_week_start + timedelta(days=6):
+                this_week_words += doc.get("word_count", 0)
+            elif last_week_start <= lm_date < this_week_start:
+                last_week_words += doc.get("word_count", 0)
+        improvement_rate = 0
+        if last_week_words > 0:
+            improvement_rate = round(((this_week_words - last_week_words) / last_week_words) * 100, 1)
+        elif this_week_words > 0:
+            improvement_rate = 100
         return {
             "total_documents": total_documents,
             "total_words": total_words,
             "average_score": round(average_score, 1),
             "writing_streak": streak,
-            "recent_activity": recent_activity
+            "recent_activity": recent_activity,
+            "improvement_rate": improvement_rate
         }
-        
     except Exception as e:
         logger.error(f"Error getting user statistics: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get user statistics")
+        return {
+            "total_documents": 0,
+            "total_words": 0,
+            "average_score": 0,
+            "writing_streak": 0,
+            "recent_activity": [],
+            "improvement_rate": 0
+        }
 
 def analyze_grammar_context(content: str, word: str, position: int) -> str:
     """Analyze grammar context around a word"""
@@ -1300,29 +945,9 @@ def analyze_grammar_context(content: str, word: str, position: int) -> str:
 
 @app.post("/api/ai/rewrite", response_model=RewriteResponse)
 async def rewrite_text(request: RewriteRequest):
-    """Rewrite text to match the given goal (e.g., formal, casual, marketing, friendly)"""
     try:
-        # Try Groq API
-        rewritten = None
-        if GROQ_API_KEY != "your-groq-api-key-here":
-            groq_url = "https://api.groq.com/openai/v1/chat/completions"
-            prompt = f"""Rewrite the following text to be more {request.goal}.\n\nText: \"{request.content}\"\n\nRewritten ({request.goal}):"""
-            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            async with aiohttp.ClientSession() as session:
-                response = await session.post(groq_url, headers=headers, json={
-                    "model": "llama3-70b-8192",
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 800
-                }, timeout=20)
-                if response.status == 200:
-                    data = await response.json()
-                    rewritten = data["choices"][0]["message"]["content"].strip()
-        # Fallback
-        if not rewritten:
-            rewritten = f"[{request.goal.capitalize()}] {request.content}"
+        prompt = f"Rewrite the following text to be more {request.goal}.\n\nText: \"{request.content}\"\n\nRewritten ({request.goal}):"
+        rewritten = await openai_chat_completion(prompt)
         return RewriteResponse(rewritten_text=rewritten)
     except Exception as e:
         logger.error(f"Error rewriting text: {e}")
@@ -1330,34 +955,61 @@ async def rewrite_text(request: RewriteRequest):
 
 @app.post("/api/ai/summarize", response_model=SummarizeResponse)
 async def summarize_text(request: SummarizeRequest):
-    """Summarize the given text using AI or fallback."""
     try:
-        summary = None
-        if GROQ_API_KEY != "your-groq-api-key-here":
-            groq_url = "https://api.groq.com/openai/v1/chat/completions"
-            prompt = f"""Please provide a concise summary of the following text in no more than 100 words:\n\nText: \"{request.content}\"\n\nSummary:"""
-            headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-            async with aiohttp.ClientSession() as session:
-                response = await session.post(groq_url, headers=headers, json={
-                    "model": "llama3-70b-8192",
-                    "messages": [
-                        {"role": "user", "content": prompt}
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 200
-                }, timeout=20)
-                if response.status == 200:
-                    data = await response.json()
-                    summary = data["choices"][0]["message"]["content"].strip()
-        # Fallback
-        if not summary:
-            sentences = re.split(r'[.!?]+', request.content)
-            sentences = [s.strip() for s in sentences if s.strip()]
-            summary = '. '.join(sentences[:2]) + ('.' if sentences else '')
+        prompt = f"Please provide a concise summary of the following text in no more than 100 words:\n\nText: \"{request.content}\"\n\nSummary:"
+        summary = await openai_chat_completion(prompt, max_tokens=200)
         return SummarizeResponse(summary=summary)
     except Exception as e:
         logger.error(f"Error summarizing text: {e}")
         return SummarizeResponse(summary="Summary not available.")
+
+# --- User management endpoints ---
+from motor.motor_asyncio import AsyncIOMotorClient
+
+# Ensure users collection exists
+mongo_client = None
+users_collection = None
+
+def get_users_collection():
+    global mongo_client, users_collection
+    if users_collection is None:
+        mongo_client = AsyncIOMotorClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017"))
+        db = mongo_client["grammarly_clone"]
+        users_collection = db["users"]
+    return users_collection
+
+@app.post("/api/users/upsert")
+async def upsert_user(user: dict):
+    """Upsert user on login/signup"""
+    logger.info(f"Received request to upsert user: {user}")
+    extra_fields = {k: v for k, v in user.items() if k != "email"}
+    user_doc = await db_manager.upsert_user(user["email"], extra_fields)
+    logger.info(f"User upserted in MongoDB: {user_doc}")
+    return {"ok": True, "user": user_doc}
+
+@app.get("/api/users/{user_id}")
+async def get_user_profile(user_id: str):
+    """Get user profile and stats"""
+    user = await db_manager.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    # Get stats
+    docs = await db_manager.get_user_documents(user_id)
+    stats = calculate_performance_metrics(docs)
+    user_profile = {k: v for k, v in user.items() if k != "_id"}
+    user_profile["stats"] = stats
+    return user_profile
+
+@app.post("/api/admin/fix_user_documents")
+async def fix_user_documents(user_id: str = Body(...)):
+    """Admin endpoint: Set user_id for all documents missing or with a different user_id to the given user_id (for migration/fix)."""
+    from motor.motor_asyncio import AsyncIOMotorClient
+    mongo_client = AsyncIOMotorClient(os.getenv("MONGODB_URI", "mongodb://localhost:27017"))
+    db = mongo_client["grammarly_clone"]
+    # Only update documents missing user_id or with a different user_id
+    result = await db["documents"].update_many({"$or": [{"user_id": {"$exists": False}}, {"user_id": {"$ne": user_id}}]}, {"$set": {"user_id": user_id}})
+    logger.info(f"Admin fix: Set user_id={user_id} for {result.modified_count} documents.")
+    return {"ok": True, "modified_count": result.modified_count}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 
