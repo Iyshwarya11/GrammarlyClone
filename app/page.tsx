@@ -213,49 +213,19 @@ export default function Dashboard() {
           </Card>
         </div>
 
-        {/* Recent Documents */}
-        <Card>
+        {/* Inspiration Card Placeholder */}
+        <Card className="bg-gradient-to-r from-green-100 to-blue-100 border-0 shadow-none mb-8">
           <CardHeader>
             <CardTitle className="flex items-center space-x-2">
-              <BookOpen className="w-5 h-5" />
-              <span>Recent Documents</span>
+              <BarChart3 className="w-6 h-6 text-green-600" />
+              <span>Inspiration for Today</span>
             </CardTitle>
-            <CardDescription>Your latest writing projects</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4">
-              {recentDocuments.map((doc) => (
-                <div key={doc.id} className="flex items-center justify-between p-4 rounded-lg border hover:bg-gray-50 transition-colors">
-                  <div className="flex items-center space-x-4">
-                    <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-                      <FileText className="w-5 h-5 text-green-600" />
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-gray-900">{doc.title}</h3>
-                      <div className="flex items-center space-x-4 text-sm text-gray-500">
-                        <span className="flex items-center">
-                          <Clock className="w-4 h-4 mr-1" />
-                          {doc.lastModified}
-                        </span>
-                        <span>{doc.wordCount} words</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center space-x-4">
-                    <Badge variant={doc.status === 'Completed' ? 'default' : 'secondary'}>
-                      {doc.status}
-                    </Badge>
-                    <div className="text-right">
-                      <div className="text-sm font-medium text-gray-900">{doc.score}%</div>
-                      <div className="text-xs text-gray-500">Score</div>
-                    </div>
-                    <Link href={`/editor/${doc.id}`}>
-                      <Button size="sm">Edit</Button>
-                    </Link>
-                  </div>
-                </div>
-              ))}
-            </div>
+            <blockquote className="italic text-lg text-gray-700 text-center py-6">
+              "The art of writing is the art of discovering what you believe."<br />
+              <span className="block mt-2 text-sm text-gray-500">— Gustave Flaubert</span>
+            </blockquote>
           </CardContent>
         </Card>
       </main>

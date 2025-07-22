@@ -16,9 +16,9 @@ class AITextAnalyzer:
     """Advanced AI-powered text analysis service"""
     
     def __init__(self, groq_api_key: str, huggingface_api_key: str):
-        self.groq_client = Groq(api_key=groq_api_key) if groq_api_key != "your-groq-api-key-here" else None
+        self.groq_client = Groq(api_key=groq_api_key) if groq_api_key != "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" else None
         self.hf_api_key = huggingface_api_key
-        self.hf_headers = {"Authorization": f"Bearer {huggingface_api_key}"} if huggingface_api_key != "your-huggingface-api-key-here" else None
+        self.hf_headers = {"Authorization": f"Bearer {huggingface_api_key}"} if huggingface_api_key != "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" else None
     
     async def analyze_sentiment_advanced(self, text: str) -> Dict[str, float]:
         """Advanced sentiment analysis using Hugging Face"""

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,35 +22,39 @@ import {
 
 export default function Insights() {
   const [timeRange, setTimeRange] = useState('week');
+  const [insightsData, setInsightsData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const weeklyData = {
-    totalWords: 15750,
-    documentsCreated: 12,
-    averageScore: 89,
-    timeSpent: 18.5,
-    improvementRate: 12,
-    topIssues: [
-      { type: 'Clarity', count: 23, trend: 'down' },
-      { type: 'Grammar', count: 18, trend: 'down' },
-      { type: 'Tone', count: 15, trend: 'up' },
-      { type: 'Engagement', count: 12, trend: 'down' }
-    ],
-    writingGoals: [
-      { goal: 'Clarity', current: 85, target: 90 },
-      { goal: 'Engagement', current: 78, target: 85 },
-      { goal: 'Tone', current: 92, target: 95 },
-      { goal: 'Delivery', current: 88, target: 90 }
-    ],
-    dailyActivity: [
-      { day: 'Mon', words: 2100, score: 87 },
-      { day: 'Tue', words: 2800, score: 91 },
-      { day: 'Wed', words: 1900, score: 85 },
-      { day: 'Thu', words: 3200, score: 93 },
-      { day: 'Fri', words: 2750, score: 89 },
-      { day: 'Sat', words: 1800, score: 88 },
-      { day: 'Sun', words: 1200, score: 86 }
-    ]
-  };
+  useEffect(() => {
+    const fetchInsights = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetch('http://localhost:8000/api/ai/insights', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ user_id: 'default', time_range: timeRange }),
+        });
+        if (!response.ok) {
+          console.error('Insights API Error:', response.status, response.statusText);
+          setError(`API Error: ${response.status}`);
+          setInsightsData(null);
+          return;
+        }
+        const data = await response.json();
+        console.log('Insights API Response:', data); // Debug log
+        setInsightsData(data);
+      } catch (err: any) {
+        console.error('Insights Fetch Error:', err);
+        setError(err.message || 'Unknown error');
+        setInsightsData(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchInsights();
+  }, [timeRange]);
 
   const achievements = [
     { id: 1, title: 'Writing Streak', description: '7 days in a row', icon: '🔥', unlocked: true },
@@ -119,11 +123,38 @@ export default function Insights() {
                   <CardTitle className="text-sm font-medium text-gray-600">Total Words</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-gray-900">{weeklyData.totalWords.toLocaleString()}</div>
+                  {loading ? (
+                    <div className="text-2xl font-bold text-gray-900">Loading...</div>
+                  ) : error ? (
+                    <div className="text-2xl font-bold text-red-600">{error}</div>
+                  ) : insightsData?.performance_metrics ? (
+                    <div className="text-2xl font-bold text-gray-900">{typeof insightsData?.performance_metrics?.total_words === "number"
+  ? insightsData.performance_metrics.total_words.toLocaleString()
+  : "N/A"}</div>
+                  ) : (
+                    <div className="text-2xl font-bold text-gray-900">N/A</div>
+                  )}
+                  {loading ? (
+                    <div className="flex items-center text-sm text-green-600 mt-1">
+                      <TrendingUp className="w-4 h-4 mr-1" />
+                      <span>Loading...</span>
+                    </div>
+                  ) : error ? (
+                    <div className="flex items-center text-sm text-red-600 mt-1">
+                      <TrendingDown className="w-4 h-4 mr-1" />
+                      <span>{error}</span>
+                    </div>
+                  ) : insightsData?.performance_metrics ? (
                   <div className="flex items-center text-sm text-green-600 mt-1">
                     <TrendingUp className="w-4 h-4 mr-1" />
-                    <span>+{weeklyData.improvementRate}% this week</span>
+                      <span>+{insightsData.performance_metrics.improvement_rate}% this week</span>
+                    </div>
+                  ) : (
+                    <div className="flex items-center text-sm text-gray-600 mt-1">
+                      <TrendingDown className="w-4 h-4 mr-1" />
+                      <span>No data</span>
                   </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -132,11 +163,36 @@ export default function Insights() {
                   <CardTitle className="text-sm font-medium text-gray-600">Documents</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-gray-900">{weeklyData.documentsCreated}</div>
+                  {loading ? (
+                    <div className="text-2xl font-bold text-gray-900">Loading...</div>
+                  ) : error ? (
+                    <div className="text-2xl font-bold text-red-600">{error}</div>
+                  ) : insightsData?.performance_metrics ? (
+                    <div className="text-2xl font-bold text-gray-900">{insightsData.performance_metrics.documents_created}</div>
+                  ) : (
+                    <div className="text-2xl font-bold text-gray-900">N/A</div>
+                  )}
+                  {loading ? (
+                    <div className="flex items-center text-sm text-blue-600 mt-1">
+                      <BookOpen className="w-4 h-4 mr-1" />
+                      <span>Loading...</span>
+                    </div>
+                  ) : error ? (
+                    <div className="flex items-center text-sm text-red-600 mt-1">
+                      <BookOpen className="w-4 h-4 mr-1" />
+                      <span>{error}</span>
+                    </div>
+                  ) : insightsData?.performance_metrics ? (
                   <div className="flex items-center text-sm text-blue-600 mt-1">
                     <BookOpen className="w-4 h-4 mr-1" />
                     <span>Created this week</span>
                   </div>
+                  ) : (
+                    <div className="flex items-center text-sm text-gray-600 mt-1">
+                      <BookOpen className="w-4 h-4 mr-1" />
+                      <span>No data</span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -145,11 +201,36 @@ export default function Insights() {
                   <CardTitle className="text-sm font-medium text-gray-600">Average Score</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-gray-900">{weeklyData.averageScore}%</div>
+                  {loading ? (
+                    <div className="text-2xl font-bold text-gray-900">Loading...</div>
+                  ) : error ? (
+                    <div className="text-2xl font-bold text-red-600">{error}</div>
+                  ) : insightsData?.performance_metrics ? (
+                    <div className="text-2xl font-bold text-gray-900">{insightsData.performance_metrics.average_score}%</div>
+                  ) : (
+                    <div className="text-2xl font-bold text-gray-900">N/A</div>
+                  )}
+                  {loading ? (
+                    <div className="flex items-center text-sm text-green-600 mt-1">
+                      <Target className="w-4 h-4 mr-1" />
+                      <span>Loading...</span>
+                    </div>
+                  ) : error ? (
+                    <div className="flex items-center text-sm text-red-600 mt-1">
+                      <Target className="w-4 h-4 mr-1" />
+                      <span>{error}</span>
+                    </div>
+                  ) : insightsData?.performance_metrics ? (
                   <div className="flex items-center text-sm text-green-600 mt-1">
                     <Target className="w-4 h-4 mr-1" />
                     <span>Above baseline</span>
                   </div>
+                  ) : (
+                    <div className="flex items-center text-sm text-gray-600 mt-1">
+                      <Target className="w-4 h-4 mr-1" />
+                      <span>No data</span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 
@@ -158,11 +239,36 @@ export default function Insights() {
                   <CardTitle className="text-sm font-medium text-gray-600">Time Spent</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <div className="text-2xl font-bold text-gray-900">{weeklyData.timeSpent}h</div>
+                  {loading ? (
+                    <div className="text-2xl font-bold text-gray-900">Loading...</div>
+                  ) : error ? (
+                    <div className="text-2xl font-bold text-red-600">{error}</div>
+                  ) : insightsData?.performance_metrics ? (
+                    <div className="text-2xl font-bold text-gray-900">{insightsData.performance_metrics.time_spent}h</div>
+                  ) : (
+                    <div className="text-2xl font-bold text-gray-900">N/A</div>
+                  )}
+                  {loading ? (
+                    <div className="flex items-center text-sm text-purple-600 mt-1">
+                      <Clock className="w-4 h-4 mr-1" />
+                      <span>Loading...</span>
+                    </div>
+                  ) : error ? (
+                    <div className="flex items-center text-sm text-red-600 mt-1">
+                      <Clock className="w-4 h-4 mr-1" />
+                      <span>{error}</span>
+                    </div>
+                  ) : insightsData?.performance_metrics ? (
                   <div className="flex items-center text-sm text-purple-600 mt-1">
                     <Clock className="w-4 h-4 mr-1" />
                     <span>This week</span>
                   </div>
+                  ) : (
+                    <div className="flex items-center text-sm text-gray-600 mt-1">
+                      <Clock className="w-4 h-4 mr-1" />
+                      <span>No data</span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>
@@ -176,9 +282,42 @@ export default function Insights() {
                 <CardDescription>Words written and quality scores over time</CardDescription>
               </CardHeader>
               <CardContent>
+                {loading ? (
+                  <div className="h-64 flex items-end space-x-2">
+                    <div className="flex-1 flex flex-col items-center">
+                      <div className="w-full bg-gray-200 rounded-t-lg mb-2 relative">
+                        <div
+                          className="bg-gray-300 rounded-t-lg transition-all duration-300"
+                          style={{ height: '100px' }}
+                        />
+                      </div>
+                      <div className="text-xs text-gray-600 mb-1">Loading...</div>
+                      <div className="text-xs font-medium">0</div>
+                      <Badge variant="outline" className="text-xs mt-1">
+                        0%
+                      </Badge>
+                    </div>
+                  </div>
+                ) : error ? (
                 <div className="h-64 flex items-end space-x-2">
-                  {weeklyData.dailyActivity.map((day, index) => (
-                    <div key={index} className="flex-1 flex flex-col items-center">
+                    <div className="flex-1 flex flex-col items-center">
+                      <div className="w-full bg-gray-200 rounded-t-lg mb-2 relative">
+                        <div
+                          className="bg-red-200 rounded-t-lg transition-all duration-300"
+                          style={{ height: '100px' }}
+                        />
+                      </div>
+                      <div className="text-xs text-gray-600 mb-1">Error</div>
+                      <div className="text-xs font-medium">0</div>
+                      <Badge variant="outline" className="text-xs mt-1">
+                        0%
+                      </Badge>
+                    </div>
+                  </div>
+                ) : insightsData?.daily_activity ? (
+                  <div className="h-64 flex items-end space-x-2">
+                    {insightsData.daily_activity.map((day: any, index: number) => (
+                      <div key={index} className="flex-1 flex flex-col items-center">
                       <div className="w-full bg-gray-200 rounded-t-lg mb-2 relative">
                         <div
                           className="bg-green-500 rounded-t-lg transition-all duration-300"
@@ -193,6 +332,23 @@ export default function Insights() {
                     </div>
                   ))}
                 </div>
+                ) : (
+                  <div className="h-64 flex items-end space-x-2">
+                    <div className="flex-1 flex flex-col items-center">
+                      <div className="w-full bg-gray-200 rounded-t-lg mb-2 relative">
+                        <div
+                          className="bg-gray-300 rounded-t-lg transition-all duration-300"
+                          style={{ height: '100px' }}
+                        />
+                      </div>
+                      <div className="text-xs text-gray-600 mb-1">No data</div>
+                      <div className="text-xs font-medium">0</div>
+                      <Badge variant="outline" className="text-xs mt-1">
+                        0%
+                      </Badge>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -205,16 +361,53 @@ export default function Insights() {
                 <CardDescription>Most frequent areas for improvement</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-3">
-                  {weeklyData.topIssues.map((issue, index) => (
-                    <div key={index} className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+                {loading ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
                       <div className="flex items-center space-x-3">
                         <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
-                          <span className="text-sm font-medium">{index + 1}</span>
+                          <span className="text-sm font-medium">1</span>
                         </div>
                         <div>
-                          <div className="font-medium text-gray-900">{issue.type}</div>
-                          <div className="text-sm text-gray-600">{issue.count} instances</div>
+                          <div className="font-medium text-gray-900">Loading...</div>
+                          <div className="text-sm text-gray-600">Loading...</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <TrendingUp className="w-4 h-4 text-red-500" />
+                        <span className="text-sm font-medium">Loading...</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : error ? (
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
+                          <span className="text-sm font-medium">1</span>
+                        </div>
+                        <div>
+                          <div className="font-medium text-gray-900">Error</div>
+                          <div className="text-sm text-gray-600">Error</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <TrendingDown className="w-4 h-4 text-red-500" />
+                        <span className="text-sm font-medium">Error</span>
+                      </div>
+                    </div>
+                  </div>
+                ) : insightsData?.top_issues ? (
+                  <div className="space-y-3">
+                    {insightsData.top_issues.map((issue: any, index: number) => (
+                      <div key={index} className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+                        <div className="flex items-center space-x-3">
+                          <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
+                            <span className="text-sm font-medium">{index + 1}</span>
+                          </div>
+                          <div>
+                            <div className="font-medium text-gray-900">{issue.type}</div>
+                            <div className="text-sm text-gray-600">{issue.count} instances</div>
                         </div>
                       </div>
                       <div className="flex items-center space-x-2">
@@ -228,6 +421,25 @@ export default function Insights() {
                     </div>
                   ))}
                 </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50">
+                      <div className="flex items-center space-x-3">
+                        <div className="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center">
+                          <span className="text-sm font-medium">1</span>
+                        </div>
+                        <div>
+                          <div className="font-medium text-gray-900">No data</div>
+                          <div className="text-sm text-gray-600">No data</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <TrendingDown className="w-4 h-4 text-green-500" />
+                        <span className="text-sm font-medium">No data</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -239,25 +451,71 @@ export default function Insights() {
                 <CardDescription>Detailed analysis of your writing patterns and quality</CardDescription>
               </CardHeader>
               <CardContent>
+                {loading ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <h3 className="font-semibold mb-3">Quality Distribution</h3>
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-gray-600">Excellent (90-100%)</span>
-                        <span className="text-sm font-medium">35%</span>
+                          <span className="text-sm font-medium">Loading...</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-gray-600">Good (80-89%)</span>
-                        <span className="text-sm font-medium">45%</span>
+                          <span className="text-sm font-medium">Loading...</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-gray-600">Average (70-79%)</span>
-                        <span className="text-sm font-medium">18%</span>
+                          <span className="text-sm font-medium">Loading...</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-gray-600">Below Average (&lt;70%)</span>
-                        <span className="text-sm font-medium">2%</span>
+                          <span className="text-sm font-medium">Loading...</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="font-semibold mb-3">Writing Patterns</h3>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Peak Hours</span>
+                          <span className="text-sm font-medium">Loading...</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Avg. Session</span>
+                          <span className="text-sm font-medium">Loading...</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Best Day</span>
+                          <span className="text-sm font-medium">Loading...</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Productivity</span>
+                          <span className="text-sm font-medium">Loading...</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : error ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <h3 className="font-semibold mb-3">Quality Distribution</h3>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Excellent (90-100%)</span>
+                          <span className="text-sm font-medium">Error</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Good (80-89%)</span>
+                          <span className="text-sm font-medium">Error</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Average (70-79%)</span>
+                          <span className="text-sm font-medium">Error</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Below Average (&lt;70%)</span>
+                          <span className="text-sm font-medium">Error</span>
                       </div>
                     </div>
                   </div>
@@ -266,23 +524,122 @@ export default function Insights() {
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-gray-600">Peak Hours</span>
-                        <span className="text-sm font-medium">9-11 AM</span>
+                          <span className="text-sm font-medium">Error</span>
                       </div>
                       <div className="flex items-center justify-between">
                         <span className="text-sm text-gray-600">Avg. Session</span>
-                        <span className="text-sm font-medium">45 minutes</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-600">Best Day</span>
-                        <span className="text-sm font-medium">Thursday</span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-sm text-gray-600">Productivity</span>
-                        <span className="text-sm font-medium">1,250 words/hour</span>
+                          <span className="text-sm font-medium">Error</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Best Day</span>
+                          <span className="text-sm font-medium">Error</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Productivity</span>
+                          <span className="text-sm font-medium">Error</span>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                ) : insightsData?.performance_metrics ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <h3 className="font-semibold mb-3">Quality Distribution</h3>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Excellent (90-100%)</span>
+                          <span className="text-sm font-medium">{typeof insightsData?.performance_metrics?.quality_distribution?.excellent === "number"
+  ? insightsData.performance_metrics.quality_distribution.excellent + "%"
+  : "N/A"}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Good (80-89%)</span>
+                          <span className="text-sm font-medium">{typeof insightsData?.performance_metrics?.quality_distribution?.good === "number"
+  ? insightsData.performance_metrics.quality_distribution.good + "%"
+  : "N/A"}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Average (70-79%)</span>
+                          <span className="text-sm font-medium">{typeof insightsData?.performance_metrics?.quality_distribution?.average === "number"
+  ? insightsData.performance_metrics.quality_distribution.average + "%"
+  : "N/A"}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Below Average (&lt;70%)</span>
+                          <span className="text-sm font-medium">{typeof insightsData?.performance_metrics?.quality_distribution?.below_average === "number"
+  ? insightsData.performance_metrics.quality_distribution.below_average + "%"
+  : "N/A"}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="font-semibold mb-3">Writing Patterns</h3>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Peak Hours</span>
+                          <span className="text-sm font-medium">{insightsData.performance_metrics.peak_hours}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Avg. Session</span>
+                          <span className="text-sm font-medium">{insightsData.performance_metrics.avg_session} minutes</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600">Best Day</span>
+                          <span className="text-sm font-medium">{insightsData.performance_metrics.best_day}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Productivity</span>
+                          <span className="text-sm font-medium">{insightsData.performance_metrics.productivity} words/hour</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <h3 className="font-semibold mb-3">Quality Distribution</h3>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Excellent (90-100%)</span>
+                          <span className="text-sm font-medium">N/A</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Good (80-89%)</span>
+                          <span className="text-sm font-medium">N/A</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Average (70-79%)</span>
+                          <span className="text-sm font-medium">N/A</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Below Average (&lt;70%)</span>
+                          <span className="text-sm font-medium">N/A</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="font-semibold mb-3">Writing Patterns</h3>
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Peak Hours</span>
+                          <span className="text-sm font-medium">N/A</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Avg. Session</span>
+                          <span className="text-sm font-medium">N/A</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-600">Best Day</span>
+                          <span className="text-sm font-medium">N/A</span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600">Productivity</span>
+                          <span className="text-sm font-medium">N/A</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -294,25 +651,81 @@ export default function Insights() {
                 <CardDescription>Track your progress toward writing improvement goals</CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="space-y-6">
-                  {weeklyData.writingGoals.map((goal, index) => (
-                    <div key={index} className="space-y-2">
+                {loading ? (
+                  <div className="space-y-6">
+                    <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="font-medium text-gray-900">{goal.goal}</span>
-                        <span className="text-sm text-gray-600">{goal.current}% / {goal.target}%</span>
+                        <span className="font-medium text-gray-900">Loading...</span>
+                        <span className="text-sm text-gray-600">Loading...</span>
                       </div>
                       <div className="w-full bg-gray-200 rounded-full h-2">
                         <div
-                          className="bg-green-500 h-2 rounded-full transition-all duration-300"
-                          style={{ width: `${(goal.current / goal.target) * 100}%` }}
+                          className="bg-gray-300 h-2 rounded-full transition-all duration-300"
+                          style={{ width: '0%' }}
                         />
                       </div>
                       <div className="text-xs text-gray-500">
-                        {goal.current >= goal.target ? 'Goal achieved!' : `${goal.target - goal.current}% to go`}
+                        Loading...
                       </div>
                     </div>
-                  ))}
+                  </div>
+                ) : error ? (
+                <div className="space-y-6">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-gray-900">Error</span>
+                        <span className="text-sm text-gray-600">Error</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div
+                          className="bg-red-200 h-2 rounded-full transition-all duration-300"
+                          style={{ width: '0%' }}
+                        />
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        Error
+                      </div>
+                    </div>
+                  </div>
+                ) : insightsData?.writing_goals ? (
+                  <div className="space-y-6">
+                    {insightsData.writing_goals.map((goal: any, index: number) => (
+                      <div key={index} className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-gray-900">{goal.goal}</span>
+                        <span className="text-sm text-gray-600">{goal.current}% / {goal.target}%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2">
+                          <div
+                            className="bg-green-500 h-2 rounded-full transition-all duration-300"
+                            style={{ width: `${(goal.current / goal.target) * 100}%` }}
+                          />
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {goal.current >= goal.target ? 'Goal achieved!' : `${goal.target - goal.current}% to go`}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="space-y-6">
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-gray-900">No data</span>
+                        <span className="text-sm text-gray-600">No data</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div
+                          className="bg-gray-300 h-2 rounded-full transition-all duration-300"
+                          style={{ width: '0%' }}
+                        />
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        No data
+                      </div>
+                    </div>
                 </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

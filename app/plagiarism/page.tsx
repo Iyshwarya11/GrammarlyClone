@@ -35,45 +35,41 @@ export default function PlagiarismChecker() {
   const [results, setResults] = useState<PlagiarismResult[]>([]);
   const [overallScore, setOverallScore] = useState(0);
 
-  const mockResults: PlagiarismResult[] = [
-    {
-      id: '1',
-      source: 'Wikipedia - Artificial Intelligence',
-      similarity: 15,
-      matchedText: 'Artificial intelligence is the simulation of human intelligence processes by machines',
-      url: 'https://en.wikipedia.org/wiki/Artificial_intelligence',
-      type: 'web'
-    },
-    {
-      id: '2',
-      source: 'IEEE Research Paper',
-      similarity: 8,
-      matchedText: 'Machine learning algorithms have revolutionized the field of data analysis',
-      url: 'https://ieeexplore.ieee.org/document/example',
-      type: 'academic'
-    },
-    {
-      id: '3',
-      source: 'Nature Journal',
-      similarity: 5,
-      matchedText: 'The implications of artificial intelligence on society are vast and complex',
-      url: 'https://nature.com/articles/example',
-      type: 'publication'
-    }
-  ];
-
   const handleCheck = async () => {
     if (!content.trim()) return;
-    
     setIsChecking(true);
-    
-    // Simulate API call
-    setTimeout(() => {
-      const totalSimilarity = mockResults.reduce((sum, result) => sum + result.similarity, 0);
-      setOverallScore(100 - totalSimilarity);
-      setResults(mockResults);
+    try {
+      const response = await fetch('http://localhost:8000/api/ai/plagiarism/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, check_web: true, check_academic: true }),
+      });
+      if (!response.ok) {
+        console.error('Plagiarism API Error:', response.status, response.statusText);
+        setResults([]);
+        setOverallScore(0);
+        return;
+      }
+      const data = await response.json();
+      console.log('Plagiarism API Response:', data); // Debug log
+      setOverallScore(data.overall_score);
+      setResults(
+        (data.matches || []).map((match: any) => ({
+          id: match.id,
+          source: match.source,
+          similarity: match.similarity,
+          matchedText: match.matched_text,
+          url: match.url,
+          type: match.type,
+        }))
+      );
+    } catch (error) {
+      console.error('Plagiarism Fetch Error:', error);
+      setResults([]);
+      setOverallScore(0);
+    } finally {
       setIsChecking(false);
-    }, 3000);
+    }
   };
 
   const getScoreColor = (score: number) => {
