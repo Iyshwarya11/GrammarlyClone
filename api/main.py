@@ -127,25 +127,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Frontend-compatible models
-def initialize_sample_data():
-    """Initialize sample documents"""
-    sample_docs = [
-        {
-            "id": "doc1",
-            "title": "Sample Document",
-            "content": "This is a sample document with some spelling mistakes like recieve and definately.",
-            "word_count": 15,
-            "score": 85,
-            "status": "active",
-            "last_modified": datetime.now().isoformat(),
-            "created_at": datetime.now().isoformat()
-        }
-    ]
-    
-    for doc in sample_docs:
-        documents_db[doc["id"]] = doc
-
 # Pydantic Models
 class DocumentResponse(BaseModel):
     id: str
